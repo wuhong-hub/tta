@@ -12,11 +12,23 @@ from tta.engine.actions import (
     PlayActionCard,
     TakeCard,
 )
-from tta.engine.constants import POP_FOOD_COST, ROW_COSTS
-from tta.engine.enums import CATEGORY_TO_BUILDING, Age, CardCategory
+from tta.engine.constants import (
+    BASE_HAPPINESS,
+    FOOD_PER_WORKER,
+    POP_FOOD_COST,
+    ROW_COSTS,
+    ROW_SLOTS,
+    STARVATION_CULTURE,
+)
+from tta.engine.enums import CATEGORY_TO_BUILDING, Age, BuildingType, CardCategory
 from tta.engine.legal import legal_actions
 from tta.engine.model import CardDB
-from tta.engine.state import GameState, PlayerState, replace_player
+from tta.engine.state import (
+    GameState,
+    PlayerState,
+    replace_player,
+    workers_total,
+)
 
 
 def apply(state: GameState, action: Action, db: CardDB) -> GameState:
@@ -124,6 +136,93 @@ def _play_action_card(state: GameState, idx: int, p: PlayerState,
     return replace_player(replace(state, discard=state.discard + (a.card_id,)), idx, p)
 
 
+def happiness(db: CardDB, p: PlayerState) -> int:
+    """满意容量 = 基础值 + 神庙类建筑产出."""
+    total = BASE_HAPPINESS
+    for cid, n in p.buildings.get(BuildingType.TEMPLE.value, {}).items():
+        total += db.get(cid).produces.get("happiness", 0) * n
+    return total
+
+
+def strength(db: CardDB, p: PlayerState) -> int:
+    """军力 = 兵种建筑产出之和(P0 无战术/领袖加成)."""
+    total = 0
+    for cid, n in p.buildings.get(BuildingType.UNIT.value, {}).items():
+        total += db.get(cid).produces.get("strength", 0) * n
+    return total
+
+
+def _produce(p: PlayerState, db: CardDB, btype: BuildingType, key: str) -> int:
+    return sum(db.get(cid).produces.get(key, 0) * n
+               for cid, n in p.buildings.get(btype.value, {}).items())
+
+
+def _settle(p: PlayerState, db: CardDB) -> PlayerState:
+    """回合末: 起义判定 -> 生产 -> 食物消耗/饥荒."""
+    if p.worker_pool > happiness(db, p):
+        return p  # RULES-AUDIT: 起义则本回合无生产
+    p = replace(p,
+                food=p.food + _produce(p, db, BuildingType.FARM, "food"),
+                materials=p.materials + _produce(p, db, BuildingType.MINE, "materials"),
+                science=p.science + _produce(p, db, BuildingType.LAB, "science"),
+                culture=p.culture + _produce(p, db, BuildingType.TEMPLE, "culture"))
+    need = FOOD_PER_WORKER * workers_total(p)
+    if p.food >= need:
+        return replace(p, food=p.food - need)
+    deficit = need - p.food
+    return replace(p, food=0,
+                   culture=max(0, p.culture - STARVATION_CULTURE * deficit))
+
+
+def _refill_row(state: GameState) -> GameState:
+    """用当前牌堆补满卡牌列空格; 牌堆空则切时代; III 空则 last_round."""
+    row = list(state.card_row)
+    deck = list(state.civil_deck)
+    future = dict(state.future_decks)
+    age = state.age
+    last_round = state.last_round
+    cursor = age
+    for i in range(ROW_SLOTS):
+        if row[i] is not None:
+            continue
+        while not deck and not last_round:
+            nxt = cursor.next()
+            if nxt is None:
+                last_round = True
+                break
+            cursor = nxt
+            deck = list(future.pop(nxt.value, ()))
+            if deck:
+                age = nxt  # 仅在启用非空牌堆时推进时代
+        if deck:
+            row[i] = deck.pop(0)
+    return replace(state, card_row=tuple(row), civil_deck=tuple(deck),
+                   future_decks=future, age=age, last_round=last_round)
+
+
 def _end_turn(state: GameState, db: CardDB) -> GameState:
-    """回合末结算与推进. Task 7 实现."""
-    raise NotImplementedError("Task 7")
+    idx = state.current_player
+    p = _settle(state.players[idx], db)
+    gov = db.get(p.government).government
+    if gov is None:
+        raise ValueError(f"government {p.government} has no stats")
+    p = replace(p, civil_actions=gov.civil_actions,
+                military_actions=gov.military_actions)
+    state = replace_player(state, idx, p)
+
+    nxt = (idx + 1) % len(state.players)
+    state = replace(state, current_player=nxt)
+    if nxt != 0:
+        return _refill_row(state)
+    # 新一轮
+    if state.last_round:
+        scores = tuple(pl.culture for pl in state.players)
+        return replace(state, terminal=True, final_scores=scores)
+    row = [c for c in state.card_row if c is not None]
+    removed = state.removed
+    if row:
+        removed = removed + (row.pop(0),)     # RULES-AUDIT: 每轮移除最左 1 张
+    row += [None] * (ROW_SLOTS - len(row))
+    state = replace(state, round=state.round + 1, card_row=tuple(row),
+                    removed=removed)
+    return _refill_row(state)
