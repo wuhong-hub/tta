@@ -1,11 +1,16 @@
-"""合法动作枚举(官方规则 P1).
+"""合法动作枚举(官方规则 P1 + P2 相位化).
 
-legal_actions(db, state) 枚举当前玩家的全部合法动作:
-- 终局 -> []; pending 非空 -> 仅可结算首个 pending 的动作 + PassTurn;
-- 第一回合(state.round == 1) -> 仅 TakeCard + 末尾 PassTurn;
+legal_actions(db, state) 枚举行动者的全部合法动作:
+- 终局 -> [];
+- pending 非空 -> 仅可结算首个 pending 的动作; 行动者为 pending[0].responder
+  (None 时为 current_player)。PassTurn 兜底仅当行动者即 current_player
+  且处于 ACTION 相位(响应他人 pending 时不可 PassTurn);
+- phase == POLITICS -> 仅 [SkipPolitics](政治动作 P2 后续任务加入);
+- phase == TURN_START -> [](引擎自动相位, 玩家不可行动);
+- phase == ACTION 且第一回合(state.round == 1) -> 仅 TakeCard + 末尾 PassTurn;
 - 其余情况: TakeCard / DevelopTech / DevelopGovernment / Build / Upgrade /
   Destroy / Disband / PlayLeader / BuildWonderStage / PlayActionCard /
-  IncreasePopulation, PassTurn 恒在末尾。
+  IncreasePopulation, PassTurn 恒在末尾(PassTurn 仅在 ACTION 相位合法)。
 
 pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0);
 breakthrough 的 develop_tech 子行动为 0 行动点全价研发手牌科技。
@@ -32,6 +37,7 @@ from tta.engine.actions import (
     PassTurn,
     PlayActionCard,
     PlayLeader,
+    SkipPolitics,
     TakeCard,
     Upgrade,
 )
@@ -43,9 +49,10 @@ from tta.engine.enums import (
     WORKER_CATEGORIES,
     Age,
     CardCategory,
+    Phase,
 )
 from tta.engine.model import CardDB, CardDefinition
-from tta.engine.state import GameState, PendingEffect, PlayerState
+from tta.engine.state import GameState, PendingEffect, PlayerState, acting_index
 
 ROW_COSTS: tuple[int, ...] = (1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3)
 """卡牌列各位置拿牌白点费(0-4 号位 1 点, 5-9 号位 2 点, 10-12 号位 3 点)."""
@@ -351,16 +358,26 @@ def _action_card_actions(db: CardDB, p: PlayerState) -> list[Action]:
 
 
 def legal_actions(db: CardDB, state: GameState) -> list[Action]:
-    """枚举当前玩家全部合法动作(规则见模块 docstring)."""
+    """枚举行动者全部合法动作(规则见模块 docstring)."""
     if state.terminal:
         return []
-    p = state.players[state.current_player]
     if state.pending:
+        # 行动者 = pending[0].responder(None 时为 current_player);
         # 仅生成可结算首个 pending 的动作; PassTurn 兜底(放弃 pending,
         # 官方行动卡效果为强制, 引擎允许放弃, SIMPLIFICATION 见 apply)
-        actions = _pending_actions(db, p, state.pending[0])
-        actions.append(PassTurn())
+        # 仅当行动者即 current_player 且处于 ACTION 相位。
+        actor = acting_index(state)
+        actions = _pending_actions(db, state.players[actor], state.pending[0])
+        if actor == state.current_player and state.phase is Phase.ACTION:
+            actions.append(PassTurn())
         return actions
+    if state.phase is Phase.POLITICS:
+        # 政治阶段: 本任务仅可跳过(政治动作 P2 后续任务加入)
+        return [SkipPolitics()]
+    if state.phase is not Phase.ACTION:
+        # TURN_START 为引擎自动相位, 玩家不可行动
+        return []
+    p = state.players[state.current_player]
     takes: list[Action] = [
         TakeCard(i) for i, card_id in enumerate(state.card_row)
         if card_id is not None and _take_card_legal(db, p, i, card_id)

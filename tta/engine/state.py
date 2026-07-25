@@ -8,7 +8,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field, replace
 
-from tta.engine.enums import Age
+from tta.engine.enums import Age, Phase
 
 ROW_SLOTS = 13
 """卡牌行槽位数(原 constants.py 职责已由 tracks.py 取代, 直接定义于此)."""
@@ -16,15 +16,21 @@ ROW_SLOTS = 13
 
 @dataclass(frozen=True)
 class PendingEffect:
-    """行动卡等待结算的子行动.
+    """等待结算的子行动/响应队列项.
 
     kind "develop_tech"(breakthrough)时: discount 恒 0(全价研发),
     science_gain 为研发完成后获得的科技点数。
+    responder: 响应者座位; None = 由 current_player 结算(P1 行动卡
+    子行动)。responder 非 None 且 ≠ current_player 时, legal/apply
+    以 responder 为行动者(见 legal.legal_actions)。
+    context: 响应上下文(卡片 id、攻击者座位等), 机制 P2 后续任务填充。
     """
 
-    kind: str        # "build_farm_mine" | "build_urban" | "wonder_stage" | "develop_tech"
+    kind: str        # "build_farm_mine" | "build_urban" | "wonder_stage" | "develop_tech" | ...
     discount: int    # 资源费折扣
     science_gain: int = 0  # develop_tech 子行动完成后的科技点收益
+    responder: int | None = None
+    context: dict[str, str | int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,14 @@ class PlayerState:
     civil_actions: int = 0
     military_actions: int = 0
     turn_discounts: dict[str, int] = field(default_factory=dict)
+    # --- P2 军事/政治字段(机制后续任务填充, 本任务仅建模与序列化) ---
+    tactics: str | None = None               # 当前专属阵型
+    tactics_public: bool = False             # 已公开(可被复制)
+    tactics_this_turn: bool = False          # 本回合已打出/复制阵型(限 1)
+    colonies: tuple[str, ...] = ()
+    declared_wars: tuple[str, ...] = ()      # 已宣告待结算的战争牌
+    pacts: tuple[str, ...] = ()              # 生效中的条约(卡 id, 3-4 人)
+    caesar_used: bool = False                # Julius Caesar 双政治一次性
 
 
 @dataclass(frozen=True)
@@ -74,6 +88,15 @@ class GameState:
     last_round: bool = False
     terminal: bool = False
     final_scores: tuple[int, ...] | None = None
+    phase: Phase = Phase.ACTION
+    # --- P2 军事/事件牌堆(机制后续任务填充, 本任务仅建模与序列化) ---
+    military_deck: tuple[str, ...] = ()
+    future_military_decks: dict[str, tuple[str, ...]] = field(
+        default_factory=dict)
+    military_discard: tuple[str, ...] = ()
+    current_events: tuple[str, ...] = ()
+    future_events: tuple[str, ...] = ()
+    past_events: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if len(self.card_row) != ROW_SLOTS:
@@ -86,6 +109,13 @@ def workers_total(p: PlayerState) -> int:
     return p.worker_pool + placed
 
 
+def acting_index(state: GameState) -> int:
+    """当前行动者座位: 首个 pending 指定 responder 时为其响应, 否则当前玩家."""
+    if state.pending and state.pending[0].responder is not None:
+        return state.pending[0].responder
+    return state.current_player
+
+
 def replace_player(state: GameState, index: int, player: PlayerState) -> GameState:
     """替换指定位置玩家, 返回新 GameState."""
     players = list(state.players)
@@ -94,17 +124,24 @@ def replace_player(state: GameState, index: int, player: PlayerState) -> GameSta
 
 
 def _pending_to_dict(e: PendingEffect) -> dict:
-    # science_gain 缺省 0 时不落盘, 保持旧格式逐字节兼容(棋谱哈希不变)
+    # science_gain 缺省 0 / responder None / context 空 时不落盘,
+    # 保持旧格式逐字节兼容(棋谱哈希不变)
     data = {"kind": e.kind, "discount": e.discount}
     if e.science_gain:
         data["science_gain"] = e.science_gain
+    if e.responder is not None:
+        data["responder"] = e.responder
+    if e.context:
+        data["context"] = dict(sorted(e.context.items()))
     return data
 
 
 def _pending_from_dict(d: dict) -> PendingEffect:
     return PendingEffect(
         kind=d["kind"], discount=d["discount"],
-        science_gain=d.get("science_gain", 0))
+        science_gain=d.get("science_gain", 0),
+        responder=d.get("responder"),
+        context=dict(d.get("context", {})))
 
 
 def _player_to_dict(p: PlayerState) -> dict:
@@ -128,6 +165,13 @@ def _player_to_dict(p: PlayerState) -> dict:
         "civil_actions": p.civil_actions,
         "military_actions": p.military_actions,
         "turn_discounts": dict(sorted(p.turn_discounts.items())),
+        "tactics": p.tactics,
+        "tactics_public": p.tactics_public,
+        "tactics_this_turn": p.tactics_this_turn,
+        "colonies": list(p.colonies),
+        "declared_wars": list(p.declared_wars),
+        "pacts": list(p.pacts),
+        "caesar_used": p.caesar_used,
     }
 
 
@@ -153,6 +197,14 @@ def _player_from_dict(d: dict) -> PlayerState:
         civil_actions=d["civil_actions"],
         military_actions=d["military_actions"],
         turn_discounts=dict(d["turn_discounts"]),
+        # P2 字段: 旧格式缺省落默认值(向后兼容)
+        tactics=d.get("tactics"),
+        tactics_public=d.get("tactics_public", False),
+        tactics_this_turn=d.get("tactics_this_turn", False),
+        colonies=tuple(d.get("colonies", ())),
+        declared_wars=tuple(d.get("declared_wars", ())),
+        pacts=tuple(d.get("pacts", ())),
+        caesar_used=d.get("caesar_used", False),
     )
 
 
@@ -173,6 +225,14 @@ def to_dict(state: GameState) -> dict:
         "last_round": state.last_round,
         "terminal": state.terminal,
         "final_scores": list(state.final_scores) if state.final_scores else None,
+        "phase": state.phase.value,
+        "military_deck": list(state.military_deck),
+        "future_military_decks": {
+            k: list(v) for k, v in sorted(state.future_military_decks.items())},
+        "military_discard": list(state.military_discard),
+        "current_events": list(state.current_events),
+        "future_events": list(state.future_events),
+        "past_events": list(state.past_events),
     }
 
 
@@ -193,6 +253,16 @@ def from_dict(data: dict) -> GameState:
         last_round=data["last_round"],
         terminal=data["terminal"],
         final_scores=tuple(data["final_scores"]) if data["final_scores"] else None,
+        # P2 字段: 旧格式缺省落默认值(向后兼容)
+        phase=Phase(data.get("phase", Phase.ACTION.value)),
+        military_deck=tuple(data.get("military_deck", ())),
+        future_military_decks={
+            k: tuple(v)
+            for k, v in data.get("future_military_decks", {}).items()},
+        military_discard=tuple(data.get("military_discard", ())),
+        current_events=tuple(data.get("current_events", ())),
+        future_events=tuple(data.get("future_events", ())),
+        past_events=tuple(data.get("past_events", ())),
     )
 
 

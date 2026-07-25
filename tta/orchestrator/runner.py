@@ -10,7 +10,7 @@ from tta.engine.constants import MAX_STEPS
 from tta.engine.legal import legal_actions
 from tta.engine.model import CardDB
 from tta.engine.setup import new_game
-from tta.engine.state import state_hash
+from tta.engine.state import acting_index, state_hash
 from tta.replay.recorder import ReplayRecorder
 
 
@@ -44,14 +44,16 @@ def run_game(db: CardDB, players: Sequence[Player], seed: int,
         if steps >= MAX_STEPS:
             raise RuntimeError(f"step limit {MAX_STEPS} exceeded")
         legal = legal_actions(db, state)
-        actor = players[state.current_player]
+        # 行动者 = pending[0].responder(响应期切换)或 current_player
+        seat = acting_index(state)
+        actor = players[seat]
         action = actor.choose(state, legal, db)
         if action not in legal:
             raise IllegalActionError(
                 f"agent {type(actor).__name__} returned illegal action {action!r}")
         if recorder:
             recorder.write_decision(round_=state.round,
-                                    player=state.current_player,
+                                    player=seat,
                                     state_hash=state_hash(state),
                                     legal_count=len(legal), action=action)
         state = apply(state, action, db)

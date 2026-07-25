@@ -26,6 +26,19 @@ class DeckType(Enum):
     MILITARY = "military"
 
 
+class Phase(Enum):
+    """回合内相位.
+
+    TURN_START 为引擎自动处理相位(回合开始阶段, 见 turn.advance,
+    玩家不可行动); POLITICS 为政治阶段(第一回合跳过); ACTION 为
+    行动阶段(PassTurn 仅在此相位合法)。
+    """
+
+    TURN_START = "turn_start"
+    POLITICS = "politics"
+    ACTION = "action"
+
+
 class CardCategory(Enum):
     """卡牌类别(官方规则 16 种)."""
 

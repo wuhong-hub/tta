@@ -30,7 +30,7 @@ advance(state, db) 流程:
 from dataclasses import replace
 
 from tta.engine import civ, economy, effects
-from tta.engine.enums import Age
+from tta.engine.enums import Age, Phase
 from tta.engine.model import CardDB
 from tta.engine.state import ROW_SLOTS, GameState, PlayerState, replace_player
 from tta.engine.tracks import consumption_value, corruption_value
@@ -48,7 +48,12 @@ _AGE_ORDER = (Age.A, Age.I, Age.II, Age.III, Age.IV)
 
 
 def advance(state: GameState, db: CardDB) -> GameState:
-    """回合末阶段 -> 推进到下一位玩家并执行其回合开始阶段."""
+    """回合末阶段 -> 推进到下一位玩家并执行其回合开始阶段.
+
+    相位流转: 当前玩家 ACTION(PassTurn)-> 下一位 TURN_START(引擎自动
+    处理回合开始阶段)-> 第一回合直接 ACTION(官方规则: 跳过回合开始
+    阶段与政治阶段), 否则 POLITICS。
+    """
     state = _end_of_turn(state, db)
     nxt = (state.current_player + 1) % len(state.players)
     if nxt == 0:
@@ -63,8 +68,11 @@ def advance(state: GameState, db: CardDB) -> GameState:
         if state.age is Age.IV:
             # IV 于非起始玩家回合开启: 递增后的这一轮为最后一轮
             state = replace(state, last_round=True)
-    state = replace(state, current_player=nxt)
-    return _start_of_turn(state, db)
+    state = replace(state, current_player=nxt, phase=Phase.TURN_START)
+    state = _start_of_turn(state, db)
+    # 第一回合跳过政治阶段(回合开始阶段 _start_of_turn 对 round==1 本就跳过)
+    phase = Phase.ACTION if state.round == 1 else Phase.POLITICS
+    return replace(state, phase=phase)
 
 
 # --- 回合末阶段 -----------------------------------------------------------

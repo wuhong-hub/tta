@@ -84,6 +84,11 @@ class IncreasePopulation:
 
 
 @dataclass(frozen=True)
+class SkipPolitics:
+    """跳过政治阶段: phase POLITICS -> ACTION(政治动作 P2 后续任务加入)."""
+
+
+@dataclass(frozen=True)
 class PassTurn:
     """结束本回合行动阶段(回合推进见 Task 8)."""
 
@@ -91,7 +96,7 @@ class PassTurn:
 Action = (
     TakeCard | DevelopTech | DevelopGovernment | Build | Upgrade | Destroy
     | Disband | PlayLeader | BuildWonderStage | PlayActionCard
-    | IncreasePopulation | PassTurn
+    | IncreasePopulation | SkipPolitics | PassTurn
 )
 
 _ACTION_TYPES: dict[str, type] = {
@@ -106,6 +111,7 @@ _ACTION_TYPES: dict[str, type] = {
     "build_wonder_stage": BuildWonderStage,
     "play_action_card": PlayActionCard,
     "increase_population": IncreasePopulation,
+    "skip_politics": SkipPolitics,
     "pass": PassTurn,
 }
 _TYPE_NAMES: dict[type, str] = {v: k for k, v in _ACTION_TYPES.items()}

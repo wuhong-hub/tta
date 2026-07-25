@@ -9,7 +9,7 @@
 - 第一回合行动点: 座位 i -> 内政 i+1, 军事 0(官方首轮拿牌规则).
 """
 
-from tta.engine.enums import Age
+from tta.engine.enums import Age, Phase
 from tta.engine.model import MAX_PLAYERS, MIN_PLAYERS, CardDB
 from tta.engine.rng import rng_shuffle
 from tta.engine.state import ROW_SLOTS, GameState, PlayerState
@@ -60,4 +60,6 @@ def new_game(db: CardDB, num_players: int, seed: int) -> GameState:
         round=1, age=Age.A, current_player=0, card_row=row, civil_deck=rest,
         future_decks=future, discard=(), removed=(), players=players,
         rng_state=rng,
+        # 官方规则: 第一回合跳过回合开始阶段与政治阶段, 直接进 ACTION
+        phase=Phase.ACTION,
     )

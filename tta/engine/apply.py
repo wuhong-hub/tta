@@ -1,8 +1,12 @@
-"""动作应用(官方规则 P1).
+"""动作应用(官方规则 P1 + P2 相位化).
 
 apply(state, action, db) 返回新 GameState, 不改动入参(嵌套 dict 整体复制)。
 合法性统一经 legal_actions 成员判定; 非法动作抛 IllegalActionError。
-PassTurn 交由 turn.advance 执行官方回合推进(见 tta/engine/turn.py)。
+PassTurn(仅 ACTION 相位合法)交由 turn.advance 执行官方回合推进
+(见 tta/engine/turn.py); SkipPolitics 将相位 POLITICS -> ACTION。
+行动者 = pending[0].responder(None 时为 current_player, 见
+state.acting_index): 响应期由 responder 结算 pending, pop 后控制权
+自然恢复为 current_player。
 """
 
 from dataclasses import replace
@@ -21,33 +25,33 @@ from tta.engine.actions import (
     PassTurn,
     PlayActionCard,
     PlayLeader,
+    SkipPolitics,
     TakeCard,
     Upgrade,
 )
 from tta.engine.economy import pay
-from tta.engine.enums import UNIT_CATEGORIES, Age, CardCategory
+from tta.engine.enums import UNIT_CATEGORIES, Age, CardCategory, Phase
 from tta.engine.legal import ROW_COSTS, legal_actions, turn_discount_for
 from tta.engine.model import CardDB
-from tta.engine.state import GameState, PlayerState, replace_player
+from tta.engine.state import GameState, PlayerState, acting_index, replace_player
 
 
 def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     """应用动作并返回新状态; 非法动作抛 IllegalActionError."""
-    if isinstance(action, PassTurn):
-        if state.terminal:
-            msg = "游戏已结束, 无合法动作"
-            raise IllegalActionError(msg)
-        if state.pending:
-            # SIMPLIFICATION: 官方行动卡效果为强制; 引擎允许 PassTurn 放弃
-            # pending(仅丢弃), 随后正常落入回合推进逻辑。
-            state = replace(state, pending=())
-        return turn.advance(state, db)
     if state.terminal:
         msg = "游戏已结束, 无合法动作"
         raise IllegalActionError(msg)
     if action not in legal_actions(db, state):
         msg = f"非法动作: {action!r}"
         raise IllegalActionError(msg)
+    if isinstance(action, PassTurn):
+        if state.pending:
+            # SIMPLIFICATION: 官方行动卡效果为强制; 引擎允许 PassTurn 放弃
+            # pending(仅丢弃), 随后正常落入回合推进逻辑。
+            state = replace(state, pending=())
+        return turn.advance(state, db)
+    if isinstance(action, SkipPolitics):
+        return replace(state, phase=Phase.ACTION)
     if isinstance(action, TakeCard):
         return _take_card(db, state, action)
     if isinstance(action, DevelopTech):
@@ -74,8 +78,8 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     raise IllegalActionError(msg)  # pragma: no cover
 
 
-def _update(state: GameState, p: PlayerState) -> GameState:
-    return replace_player(state, state.current_player, p)
+def _update(state: GameState, idx: int, p: PlayerState) -> GameState:
+    return replace_player(state, idx, p)
 
 
 def _spend_point(p: PlayerState, military: bool) -> PlayerState:
@@ -127,7 +131,8 @@ def _add_worker(p: PlayerState, category: CardCategory, card_id: str,
 
 
 def _take_card(db: CardDB, state: GameState, action: TakeCard) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     card_id = state.card_row[action.row_index]
     if card_id is None:  # pragma: no cover - legal 已排除
         msg = f"卡牌列 {action.row_index} 号位为空"
@@ -154,7 +159,7 @@ def _take_card(db: CardDB, state: GameState, action: TakeCard) -> GameState:
         p = replace(p,
                     science=p.science + gains.get("science", 0),
                     culture=p.culture + gains.get("culture", 0))
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 _SPECIAL_AGE_ORDER = (Age.A, Age.I, Age.II, Age.III)
@@ -192,7 +197,8 @@ def _replace_lower_special(
 
 
 def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     card = db.get(action.card_id)
     free, science_gain = False, 0
     if state.pending and state.pending[0].kind == effects.KIND_DEVELOP_TECH:
@@ -212,13 +218,14 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
         state, p = _replace_lower_special(db, state, p, action.card_id)
     # 研发即时收益(leonardo +1 资源 / newton 拿回白点 / justice_system +3 蓝点)
     p = effects.on_develop_tech_gains(db, p, action.card_id)
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _develop_government(
     db: CardDB, state: GameState, action: DevelopGovernment,
 ) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     card = db.get(action.card_id)
     p = _remove_from_hand(p, action.card_id)
     if action.revolution:
@@ -232,13 +239,14 @@ def _develop_government(
         fee = card.cost_science
         p = _spend_point(p, military=False)
     p = replace(p, science=p.science - fee, government=action.card_id)
-    old_government = state.players[state.current_player].government
+    old_government = state.players[idx].government
     state = replace(state, discard=state.discard + (old_government,))
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _build(db: CardDB, state: GameState, card_id: str) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     card = db.get(card_id)
     free, discount, state = _match_build_pending(state, card.category)
     if not free:
@@ -251,11 +259,12 @@ def _build(db: CardDB, state: GameState, card_id: str) -> GameState:
     p = pay(db, p, "resource", cost)
     p = replace(p, worker_pool=p.worker_pool - 1)
     p = _add_worker(p, card.category, card_id, +1)
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     from_card = db.get(action.from_card_id)
     to_card = db.get(action.to_card_id)
     free, discount, state = _match_build_pending(
@@ -271,7 +280,7 @@ def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
     p = pay(db, p, "resource", cost)
     p = _add_worker(p, from_card.category, action.from_card_id, -1)
     p = _add_worker(p, to_card.category, action.to_card_id, +1)
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _match_build_pending(
@@ -303,16 +312,18 @@ def _remove_worker(
     SIMPLIFICATION: 摧毁农场/矿场时卡上蓝点(card_tokens)保留(官方规则
     未明确, 引擎约定保留)。
     """
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     card = db.get(card_id)
     p = _spend_point(p, military=military)
     p = _add_worker(p, card.category, card_id, -1)
     p = replace(p, worker_pool=p.worker_pool + 1)
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _play_leader(db: CardDB, state: GameState, action: PlayLeader) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     card = db.get(action.card_id)
     p = _remove_from_hand(p, action.card_id)
     # 官方规则: 打出领袖付 1 白点; 仅替换已有领袖时拿回 1 白点(净耗 0),
@@ -323,11 +334,12 @@ def _play_leader(db: CardDB, state: GameState, action: PlayLeader) -> GameState:
         p = replace(p, civil_actions=p.civil_actions + 1)
     p = replace(p, leader=action.card_id,
                 leader_ages=p.leader_ages + (card.age.value,))
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     if p.wonder_progress is None:  # pragma: no cover - legal 已排除
         msg = "无在建奇迹"
         raise IllegalActionError(msg)
@@ -349,7 +361,7 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
                     blue_bank=p.blue_bank + len(stages))
     else:
         p = replace(p, wonder_progress=(card_id, stages_done))
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _increase_population(db: CardDB, state: GameState) -> GameState:
@@ -358,16 +370,18 @@ def _increase_population(db: CardDB, state: GameState) -> GameState:
     结算与 frugality 行动卡共用 effects.increase_population(effects 不得
     import apply, 故共用函数置于 effects)。
     """
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     p = _spend_point(p, military=False)
     p = effects.increase_population(db, p)
-    return _update(state, p)
+    return _update(state, idx, p)
 
 
 def _play_action_card(
     db: CardDB, state: GameState, action: PlayActionCard,
 ) -> GameState:
-    p = state.players[state.current_player]
+    idx = acting_index(state)
+    p = state.players[idx]
     card = db.get(action.card_id)
     handler = effects.ACTION_HANDLERS.get(card.handler)
     if handler is None:  # pragma: no cover - legal 已排除
@@ -377,5 +391,5 @@ def _play_action_card(
     p = _remove_from_hand(p, action.card_id)
     p = _spend_point(p, military=False)
     state = replace(state, discard=state.discard + (action.card_id,))
-    state = _update(state, p)
-    return handler(state, state.current_player, db, action.option)
+    state = _update(state, idx, p)
+    return handler(state, idx, db, action.option)
