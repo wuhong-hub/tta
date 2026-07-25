@@ -20,6 +20,8 @@
 - mahatma_gandhi: 静态 +2 为文化而非笑脸;
 - sid_meier: 实验室 -1 为科技(灯泡图标)而非食物;
 - pro_sports: 3 文化 + 4 笑脸; multimedia: 3 文化 + 3 科技。
+- winston_churchill: 每回合二选一为 +3 文化(PDF 竖琴图标正确,
+  官方卡面即 +3 文化)而非 +3 军力。
 
 行动卡 id 带时代后缀(如 reserves_iii), handler 名 = 卡 id 全名,
 effects.py 按时代实例注册(X 加成各异)。bill_gates 实验室产资源(需
@@ -283,7 +285,7 @@ BILL_GATES = _leader(
 
 WINSTON_CHURCHILL = _leader(
     "winston_churchill", "温斯顿·丘吉尔", "Winston Churchill",
-    "你的回合开始时二选一: +3 军力; 或本回合军事用途有 3 科技与 3 资源"
+    "你的回合开始时二选一: +3 文化; 或本回合军事用途有 3 科技与 3 资源"
     "(每回合选择机制 P2-DEFERRED)。",
 )
 
