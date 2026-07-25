@@ -1,4 +1,4 @@
-"""引擎核心枚举."""
+"""引擎核心枚举与卡牌类别集合(P1 官方规则核心)."""
 
 from enum import Enum
 
@@ -13,7 +13,7 @@ class Age(Enum):
 
     def next(self) -> "Age | None":
         """返回下一时代, III 之后为 None."""
-        order = [Age.A, Age.I, Age.II, Age.III]
+        order = (Age.A, Age.I, Age.II, Age.III)
         idx = order.index(self)
         return order[idx + 1] if idx + 1 < len(order) else None
 
@@ -26,31 +26,54 @@ class DeckType(Enum):
 
 
 class CardCategory(Enum):
-    """卡牌类别."""
+    """卡牌类别(官方规则 16 种)."""
 
     FARM = "farm"
     MINE = "mine"
     LAB = "lab"
     TEMPLE = "temple"
-    UNIT = "unit"
+    LIBRARY = "library"
+    THEATER = "theater"
+    ARENA = "arena"
+    INFANTRY = "infantry"
+    CAVALRY = "cavalry"
+    ARTILLERY = "artillery"
+    AIR = "air"
     GOVERNMENT = "government"
+    LEADER = "leader"
+    WONDER = "wonder"
     ACTION = "action"
+    SPECIAL = "special"
 
 
-class BuildingType(Enum):
-    """建筑槽位类型(与单位共用一套工人放置机制)."""
+URBAN_CATEGORIES = frozenset({
+    CardCategory.LAB,
+    CardCategory.TEMPLE,
+    CardCategory.LIBRARY,
+    CardCategory.THEATER,
+    CardCategory.ARENA,
+})
+"""城市建筑类别(受政体城市建筑上限约束)."""
 
-    FARM = "farm"
-    MINE = "mine"
-    LAB = "lab"
-    TEMPLE = "temple"
-    UNIT = "unit"
+UNIT_CATEGORIES = frozenset({
+    CardCategory.INFANTRY,
+    CardCategory.CAVALRY,
+    CardCategory.ARTILLERY,
+    CardCategory.AIR,
+})
+"""军事单位类别."""
+
+WORKER_CATEGORIES = (
+    URBAN_CATEGORIES | UNIT_CATEGORIES
+    | frozenset({CardCategory.FARM, CardCategory.MINE})
+)
+"""可放置工人的类别; 建筑槽位直接以 category.value 为键(BuildingType 已删除)."""
 
 
-CATEGORY_TO_BUILDING: dict[CardCategory, BuildingType] = {
-    CardCategory.FARM: BuildingType.FARM,
-    CardCategory.MINE: BuildingType.MINE,
-    CardCategory.LAB: BuildingType.LAB,
-    CardCategory.TEMPLE: BuildingType.TEMPLE,
-    CardCategory.UNIT: BuildingType.UNIT,
-}
+class SpecialType(Enum):
+    """特殊科技子类."""
+
+    LAW = "law"
+    WARFARE = "warfare"
+    EXPLORATION = "exploration"
+    CONSTRUCTION = "construction"

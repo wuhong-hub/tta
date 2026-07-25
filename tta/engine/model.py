@@ -2,49 +2,77 @@
 
 from dataclasses import dataclass, field
 
-from tta.engine.enums import Age, CardCategory, DeckType
+from tta.engine.enums import Age, CardCategory, DeckType, SpecialType
+
+MIN_PLAYERS = 2
+MAX_PLAYERS = 4
 
 
 @dataclass(frozen=True)
 class GovernmentStats:
-    """政体数值."""
+    """政体数值.
+
+    bonus 的键为静态文明加成名(如 "science" / "culture" / "strength").
+    """
 
     civil_actions: int
     military_actions: int
-    civil_hand_limit: int
-    military_hand_limit: int
+    urban_limit: int
+    bonus: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class CardDefinition:
     """一张卡的静态定义.
 
-    produces/gains 的键为资源名字符串:
+    urban_produces / wonder_bonus / GovernmentStats.bonus 的键为收益名字符串:
     "food" / "materials" / "science" / "culture" / "strength" / "happiness".
     """
 
     id: str
-    name: str
+    name: str                       # 中文名
+    name_en: str                    # 英文名(对照 Card Reference)
     age: Age
     deck: DeckType
     category: CardCategory
-    text: str = ""
-    cost_science: int = 0        # 研发所需科技点(政体/科技类)
-    build_cost: int = 0          # 在其上放置 1 个工人所需资源
-    produces: dict[str, int] = field(default_factory=dict)   # 每工人产出
-    government: GovernmentStats | None = None                # 政体卡专有
-    gains: dict[str, int] = field(default_factory=dict)      # 行动卡一次性收益
+    text: str = ""                  # 效果文本(人类/LLM 阅读)
+    cost_science: int = 0           # 科技费(政府牌为和平演变费)
+    cost_science_revolution: int = 0  # 政府牌革命费
+    build_cost: int = 0             # 放置 1 工人的资源费
+    token_value: int = 0            # 农场/矿场: 每蓝点的食物/资源价值
+    urban_produces: dict[str, int] = field(default_factory=dict)  # 城市建筑每工人产出
+    strength: int = 0               # 军事单位每工人军力
+    government: GovernmentStats | None = None
+    special_type: SpecialType | None = None
+    wonder_stages: tuple[int, ...] = ()   # 奇迹各阶段资源费
+    wonder_bonus: dict[str, int] = field(default_factory=dict)  # 奇迹完成后静态文明加成
+    handler: str = ""                     # effects.py 特殊效果处理器名, 空=无
+    quantities: tuple[int, int, int] = (0, 0, 0)  # (2p, 3p, 4p) 张数
 
 
 @dataclass(frozen=True)
 class CardDB:
-    """一套牌库: 卡牌定义 + 各时代牌堆(卡牌 id, 可重复表示多张)."""
+    """一套牌库: 卡牌定义 + 开局布局; 各时代牌堆由 deck_for 按 quantities 生成."""
 
     cards: dict[str, CardDefinition]
-    civil_decks: dict[Age, tuple[str, ...]]
     initial_tableau: tuple[str, ...]   # 每名玩家开局已研发的建筑卡 id(含重复)
     initial_government: str            # 开局政体卡 id
 
     def get(self, card_id: str) -> CardDefinition:
         """按 id 取卡牌定义."""
         return self.cards[card_id]
+
+    def deck_for(self, age: Age, num_players: int) -> tuple[str, ...]:
+        """按 quantities 组成指定时代、指定人数的牌堆(卡牌 id, 含重复).
+
+        顺序为 cards 的插入序; num_players 须在 [MIN_PLAYERS, MAX_PLAYERS].
+        """
+        if not MIN_PLAYERS <= num_players <= MAX_PLAYERS:
+            msg = f"num_players 须在 {MIN_PLAYERS}-{MAX_PLAYERS}, 收到 {num_players}"
+            raise ValueError(msg)
+        idx = num_players - MIN_PLAYERS
+        ids: list[str] = []
+        for card in self.cards.values():
+            if card.age is age:
+                ids.extend([card.id] * card.quantities[idx])
+        return tuple(ids)

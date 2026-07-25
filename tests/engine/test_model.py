@@ -1,7 +1,16 @@
-"""枚举与卡牌数据模型测试."""
+"""枚举与卡牌数据模型测试(P1 官方规则核心)."""
 
-from tta.engine.constants import ROW_COSTS, ROW_SLOTS
-from tta.engine.enums import CATEGORY_TO_BUILDING, Age, BuildingType, CardCategory, DeckType
+import pytest
+
+from tta.engine.enums import (
+    UNIT_CATEGORIES,
+    URBAN_CATEGORIES,
+    WORKER_CATEGORIES,
+    Age,
+    CardCategory,
+    DeckType,
+    SpecialType,
+)
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
 
 
@@ -12,35 +21,118 @@ def test_age_next() -> None:
     assert Age.III.next() is None
 
 
-def test_row_costs_length() -> None:
-    assert len(ROW_COSTS) == ROW_SLOTS == 13
-    assert all(c in (1, 2, 3) for c in ROW_COSTS)
+def test_card_category_sixteen() -> None:
+    expected = {
+        "FARM", "MINE", "LAB", "TEMPLE", "LIBRARY", "THEATER", "ARENA",
+        "INFANTRY", "CAVALRY", "ARTILLERY", "AIR",
+        "GOVERNMENT", "LEADER", "WONDER", "ACTION", "SPECIAL",
+    }
+    assert {c.name for c in CardCategory} == expected
+    assert len(CardCategory) == 16
 
 
-def test_category_to_building_covers_buildings() -> None:
-    assert CATEGORY_TO_BUILDING[CardCategory.FARM] is BuildingType.FARM
-    assert CATEGORY_TO_BUILDING[CardCategory.UNIT] is BuildingType.UNIT
-    assert CardCategory.GOVERNMENT not in CATEGORY_TO_BUILDING
-    assert CardCategory.ACTION not in CATEGORY_TO_BUILDING
+def test_category_sets() -> None:
+    assert URBAN_CATEGORIES == frozenset({
+        CardCategory.LAB, CardCategory.TEMPLE, CardCategory.LIBRARY,
+        CardCategory.THEATER, CardCategory.ARENA,
+    })
+    assert UNIT_CATEGORIES == frozenset({
+        CardCategory.INFANTRY, CardCategory.CAVALRY,
+        CardCategory.ARTILLERY, CardCategory.AIR,
+    })
+    assert WORKER_CATEGORIES == (
+        URBAN_CATEGORIES | UNIT_CATEGORIES
+        | frozenset({CardCategory.FARM, CardCategory.MINE})
+    )
 
 
-def _gov() -> GovernmentStats:
-    return GovernmentStats(civil_actions=4, military_actions=2,
-                           civil_hand_limit=4, military_hand_limit=2)
+def test_special_type() -> None:
+    assert {s.name for s in SpecialType} == {
+        "LAW", "WARFARE", "EXPLORATION", "CONSTRUCTION",
+    }
 
 
-def test_card_db_get() -> None:
-    card = CardDefinition(id="despotism", name="专制", age=Age.A,
-                          deck=DeckType.CIVIL, category=CardCategory.GOVERNMENT,
-                          government=_gov())
-    db = CardDB(cards={"despotism": card}, civil_decks={Age.A: ()},
-                initial_tableau=(), initial_government="despotism")
-    assert db.get("despotism") is card
+def test_government_stats_default_bonus() -> None:
+    stats = GovernmentStats(civil_actions=4, military_actions=2, urban_limit=2)
+    assert stats.civil_actions == 4
+    assert stats.military_actions == 2
+    assert stats.urban_limit == 2
+    assert stats.bonus == {}
 
 
 def test_card_definition_defaults() -> None:
-    card = CardDefinition(id="x", name="x", age=Age.A,
-                          deck=DeckType.CIVIL, category=CardCategory.ACTION)
+    card = CardDefinition(
+        id="agriculture",
+        name="农业",
+        name_en="Agriculture",
+        age=Age.A,
+        deck=DeckType.CIVIL,
+        category=CardCategory.FARM,
+    )
+    assert card.text == ""
     assert card.cost_science == 0
-    assert card.produces == {}
+    assert card.cost_science_revolution == 0
+    assert card.build_cost == 0
+    assert card.token_value == 0
+    assert card.urban_produces == {}
+    assert card.strength == 0
     assert card.government is None
+    assert card.special_type is None
+    assert card.wonder_stages == ()
+    assert card.wonder_bonus == {}
+    assert card.handler == ""
+    assert card.quantities == (0, 0, 0)
+
+
+def _sample_db() -> CardDB:
+    cards = {
+        "agriculture": CardDefinition(
+            id="agriculture", name="农业", name_en="Agriculture",
+            age=Age.A, deck=DeckType.CIVIL, category=CardCategory.FARM,
+            quantities=(2, 3, 4),
+        ),
+        "bronze": CardDefinition(
+            id="bronze", name="青铜", name_en="Bronze",
+            age=Age.A, deck=DeckType.CIVIL, category=CardCategory.MINE,
+            quantities=(2, 2, 2),
+        ),
+        "iron": CardDefinition(
+            id="iron", name="铁", name_en="Iron",
+            age=Age.I, deck=DeckType.CIVIL, category=CardCategory.MINE,
+            quantities=(2, 2, 2),
+        ),
+    }
+    return CardDB(
+        cards=cards,
+        initial_tableau=("agriculture", "bronze"),
+        initial_government="despotism",
+    )
+
+
+def test_deck_for_player_counts() -> None:
+    db = _sample_db()
+    assert db.deck_for(Age.A, 2) == (
+        "agriculture", "agriculture", "bronze", "bronze",
+    )
+    assert db.deck_for(Age.A, 3) == (
+        "agriculture", "agriculture", "agriculture", "bronze", "bronze",
+    )
+    assert db.deck_for(Age.A, 4) == (
+        "agriculture", "agriculture", "agriculture", "agriculture",
+        "bronze", "bronze",
+    )
+    assert db.deck_for(Age.I, 2) == ("iron", "iron")
+    assert db.deck_for(Age.II, 2) == ()
+
+
+def test_deck_for_invalid_players() -> None:
+    db = _sample_db()
+    with pytest.raises(ValueError):
+        db.deck_for(Age.A, 5)
+
+
+def test_card_db_get() -> None:
+    db = _sample_db()
+    assert db.get("bronze").name_en == "Bronze"
+    assert db.initial_tableau == ("agriculture", "bronze")
+    assert db.initial_government == "despotism"
