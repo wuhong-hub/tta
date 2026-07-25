@@ -14,6 +14,7 @@ from tta.engine import effects
 from tta.engine.actions import (
     Build,
     BuildWonderStage,
+    DeclineResponse,
     DevelopTech,
     IllegalActionError,
     IncreasePopulation,
@@ -260,7 +261,8 @@ def test_engineering_genius_pending_flow(db: CardDB) -> None:
                 card_tokens={"bronze": 1}, blue_bank=16)
     new = apply(_state(p), PlayActionCard("engineering_genius"), db)
     assert new.pending == (PendingEffect("wonder_stage", 2),)
-    assert legal_actions(db, new) == [BuildWonderStage(), PassTurn()]
+    assert legal_actions(db, new) == [
+        BuildWonderStage(), DeclineResponse(), PassTurn()]
     new2 = apply(new, BuildWonderStage(), db)
     p2 = new2.players[0]
     assert p2.wonder_progress == ("pyramids", 1)

@@ -7,6 +7,7 @@ from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
+    DeclineResponse,
     Destroy,
     DevelopGovernment,
     DevelopTech,
@@ -161,7 +162,9 @@ def test_terminal_state_has_no_actions() -> None:
 def test_pending_blocks_everything_but_pass() -> None:
     pending = (PendingEffect(kind="build_farm_mine", discount=1),)
     state = _state(_player(), card_row=_row("bronze"), pending=pending)
-    assert legal_actions(_db(), state) == [PassTurn()]
+    # 无可结算动作时: DeclineResponse(放弃 pending[0], P2-T5 白名单兜底)
+    # + PassTurn(放弃全部 pending 并推进回合)
+    assert legal_actions(_db(), state) == [DeclineResponse(), PassTurn()]
 
 
 def test_first_round_only_take_card() -> None:

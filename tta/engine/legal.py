@@ -3,9 +3,13 @@
 legal_actions(db, state) 枚举行动者的全部合法动作:
 - 终局 -> [];
 - pending 非空 -> 仅可结算首个 pending 的动作; 行动者为 pending[0].responder
-  (None 时为 current_player)。PassTurn 兜底仅当行动者即 current_player
-  且处于 ACTION 相位(响应他人 pending 时不可 PassTurn);
-- phase == POLITICS -> 仅 [SkipPolitics](政治动作 P2 后续任务加入);
+  (None 时为 current_player)。DeclineResponse 兜底仅当 pending[0].kind 在
+  可放弃白名单(events.DECLINABLE_PENDING_KINDS; 强制类如 discard_military
+  不可放弃); PassTurn 兜底仅当行动者即 current_player、处于 ACTION 相位
+  且 pending 栈中无他玩家 responder(防止一次 PassTurn 丢弃他玩家的事件
+  选择 pending);
+- phase == POLITICS -> 政治动作(politics.politics_actions, 每回合限 1)
+  + SkipPolitics;
 - phase == TURN_START -> [](引擎自动相位, 玩家不可行动);
 - phase == ACTION 且第一回合(state.round == 1) -> 仅 TakeCard + 末尾 PassTurn;
 - 其余情况: TakeCard / DevelopTech / DevelopGovernment / Build / Upgrade /
@@ -28,12 +32,14 @@ Upgrade 四处挂钩, 见 effects.flexible_actions); frugality 等行动卡的
 额外打出条件经 effects.PLAY_CONDITIONS 预判。
 """
 
-from tta.engine import effects
+from tta.engine import effects, events, politics
 from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
+    ChooseEventOption,
     CopyTactics,
+    DeclineResponse,
     Destroy,
     DevelopGovernment,
     DevelopTech,
@@ -291,14 +297,20 @@ def _wonder_actions(
     return [BuildWonderStage()]
 
 
-def _develop_tech_pending_actions(db: CardDB, p: PlayerState) -> list[Action]:
-    """breakthrough pending 子行动: 0 行动点全价研发手牌中一项科技."""
+def _develop_tech_pending_actions(
+    db: CardDB, p: PlayerState, discount: int = 0,
+) -> list[Action]:
+    """develop_tech pending 子行动: 0 行动点研发手牌中一项科技.
+
+    breakthrough 为全价研发(discount=0, 完成后 +science_gain 科技);
+    development_of_civilization 事件的 tech 选项带科技费折扣(discount=1)。
+    """
     actions: list[Action] = []
     for card_id in dict.fromkeys(p.hand_civil):
         card = db.get(card_id)
         if card.category not in _DEVELOP_CATEGORIES:
             continue
-        if p.science < card.cost_science:
+        if p.science < max(0, card.cost_science - discount):
             continue
         actions.append(DevelopTech(card_id))
     return actions
@@ -326,13 +338,45 @@ def _pending_actions(
     if pending.kind == effects.KIND_WONDER_STAGE:
         return _wonder_actions(db, p, point_cost=0, discount=pending.discount)
     if pending.kind == effects.KIND_DEVELOP_TECH:
-        return _develop_tech_pending_actions(db, p)
+        return _develop_tech_pending_actions(db, p, discount=pending.discount)
     if pending.kind == effects.KIND_DISCARD_MILITARY:
         # 回合末弃多余军事牌: 逐张选择直到合规。
         # 法律兜底: 超上限时手牌必非空, 故恒有 DiscardMilitary 可用
         return [DiscardMilitary(card_id)
                 for card_id in dict.fromkeys(p.hand_military)]
+    if pending.kind == events.KIND_EVENT_MARKETS:
+        # development_of_markets: +2 食物或 +2 资源二选一
+        return [ChooseEventOption("food"), ChooseEventOption("resource")]
+    if pending.kind in events.EVENT_FREE_BUILD:
+        # development_of_religion/warfare: 免费建 1 宗教/战士
+        return _free_build_actions(p, events.EVENT_FREE_BUILD[pending.kind])
+    if pending.kind == events.KIND_EVENT_CIVILIZATION:
+        return _civilization_choice_actions(db, p)
     return []
+
+
+def _free_build_actions(p: PlayerState, card_id: str) -> list[Action]:
+    """事件免费建造 pending: 有可用工人且该卡有空槽 -> [Build(card_id)]."""
+    if p.worker_pool < 1:
+        return []
+    placed = sum(slots.get(card_id, 0) for slots in p.buildings.values())
+    if placed >= p.developed.count(card_id):
+        return []
+    return [Build(card_id)]
+
+
+def _civilization_choice_actions(db: CardDB, p: PlayerState) -> list[Action]:
+    """development_of_civilization 三选一: 仅枚举当前可行的选项."""
+    actions: list[Action] = []
+    farm_mine = effects.PENDING_BUILD_CATEGORIES[effects.KIND_BUILD_FARM_MINE]
+    if _build_actions(db, p, categories=farm_mine, point_cost=0, discount=1):
+        actions.append(ChooseEventOption("farm_mine"))
+    if _build_actions(db, p, categories=URBAN_CATEGORIES, point_cost=0,
+                      discount=1):
+        actions.append(ChooseEventOption("urban"))
+    if _develop_tech_pending_actions(db, p, discount=1):
+        actions.append(ChooseEventOption("tech"))
+    return actions
 
 
 def _tactics_actions(db: CardDB, state: GameState) -> list[Action]:
@@ -403,17 +447,25 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
         return []
     if state.pending:
         # 行动者 = pending[0].responder(None 时为 current_player);
-        # 仅生成可结算首个 pending 的动作; PassTurn 兜底(放弃 pending,
-        # 官方行动卡效果为强制, 引擎允许放弃, SIMPLIFICATION 见 apply)
-        # 仅当行动者即 current_player 且处于 ACTION 相位。
+        # 仅生成可结算首个 pending 的动作; DeclineResponse 兜底(放弃
+        # pending[0], 仅可放弃白名单 kind, 强制类如 discard_military 除外);
+        # PassTurn 兜底(放弃全部 pending 并推进回合)仅当行动者即
+        # current_player、处于 ACTION 相位且栈中无他玩家 responder。
         actor = acting_index(state)
         actions = _pending_actions(db, state.players[actor], state.pending[0])
-        if actor == state.current_player and state.phase is Phase.ACTION:
+        if state.pending[0].kind in events.DECLINABLE_PENDING_KINDS:
+            actions.append(DeclineResponse())
+        if (actor == state.current_player
+                and state.phase is Phase.ACTION
+                and all(e.responder in (None, state.current_player)
+                        for e in state.pending)):
             actions.append(PassTurn())
         return actions
     if state.phase is Phase.POLITICS:
-        # 政治阶段: 本任务仅可跳过(政治动作 P2 后续任务加入)
-        return [SkipPolitics()]
+        # 政治阶段: 政治动作(每回合限 1, 见 politics.py) + SkipPolitics
+        politics_moves: list[Action] = politics.politics_actions(db, state)
+        politics_moves.append(SkipPolitics())
+        return politics_moves
     if state.phase is not Phase.ACTION:
         # TURN_START 为引擎自动相位, 玩家不可行动
         return []

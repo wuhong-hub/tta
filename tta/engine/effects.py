@@ -205,6 +205,19 @@ PENDING_UPGRADE_CATEGORIES: dict[str, frozenset[CardCategory]] = {
 }
 """仅升级类 pending kind -> 允许的卡牌类别(efficient_upgrade, 不含兵种)."""
 
+DECLINABLE_PENDING_KINDS: frozenset[str] = frozenset({
+    KIND_BUILD_FARM_MINE,
+    KIND_BUILD_URBAN,
+    KIND_WONDER_STAGE,
+    KIND_DEVELOP_TECH,
+    KIND_UPGRADE_FARM_MINE_URBAN,
+})
+"""可放弃(DeclineResponse)的 pending kind 白名单(非强制类).
+
+强制类(如 KIND_DISCARD_MILITARY: 恒有 DiscardMilitary 可执行)不在名单;
+事件选择类 kind 由 events.py 并入(见 events.DECLINABLE_PENDING_KINDS)。
+"""
+
 
 def push_pending(state: GameState, pending: PendingEffect) -> GameState:
     """将子行动压入 pending 栈(供折扣子行动类 handler 使用)."""

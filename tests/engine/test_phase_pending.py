@@ -10,6 +10,7 @@ import pytest
 from tta.engine import turn
 from tta.engine.actions import (
     Build,
+    DeclineResponse,
     IllegalActionError,
     PassTurn,
     SkipPolitics,
@@ -275,10 +276,12 @@ def test_pending_responder_generates_actions_for_responder() -> None:
     db = _db()
     state = _responder_pending_state()
     legal = legal_actions(db, state)
-    # 为 responder(1 号位)生成结算动作; 响应期间无 PassTurn 兜底
+    # 为 responder(1 号位)生成结算动作; 响应期间无 PassTurn 兜底;
+    # 可放弃白名单 kind 附带 DeclineResponse 兜底(P2-T5)
     assert Build("agriculture") in legal
+    assert DeclineResponse() in legal
     assert PassTurn() not in legal
-    assert all(isinstance(a, Build) for a in legal)
+    assert all(isinstance(a, (Build, DeclineResponse)) for a in legal)
 
 
 def test_pending_responder_settlement_pops_and_restores_control() -> None:

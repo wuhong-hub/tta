@@ -15,6 +15,7 @@ from tta.engine import effects
 from tta.engine.actions import (
     Build,
     BuildWonderStage,
+    DeclineResponse,
     IllegalActionError,
     PassTurn,
     PlayActionCard,
@@ -182,13 +183,13 @@ def test_rich_land_pending_full_flow() -> None:
     assert new.players[0].civil_actions == 0
     assert new.discard == ("rich_land",)
 
-    # pending 时仅生成可结算 pending 的动作 + PassTurn; 城市建筑被排除
+    # pending 时仅生成可结算 pending 的动作 + 兜底; 城市建筑被排除
     legal = legal_actions(db, new)
     assert Build("agriculture") in legal
     assert Build("philosophy") not in legal
     assert legal[-1] == PassTurn()
     assert all(
-        isinstance(a, (Build, Upgrade, PassTurn)) for a in legal
+        isinstance(a, (Build, Upgrade, DeclineResponse, PassTurn)) for a in legal
     )
 
     # 0 白点 + 折扣结算, pending pop 后恢复正常
@@ -210,7 +211,8 @@ def test_rich_land_upgrade_with_discount() -> None:
     new = apply(_state(p), PlayActionCard("rich_land"), db)
     legal = legal_actions(db, new)
     # 差价 max(0, 3-2)=1, 折扣 3 后为 0; 无空闲工人故无 Build
-    assert legal == [Upgrade("agriculture", "irrigation"), PassTurn()]
+    assert legal == [Upgrade("agriculture", "irrigation"),
+                     DeclineResponse(), PassTurn()]
     new2 = apply(new, Upgrade("agriculture", "irrigation"), db)
     p2 = new2.players[0]
     assert new2.pending == ()
@@ -282,7 +284,8 @@ def test_engineering_genius_wonder_stage() -> None:
     new = apply(_state(p), PlayActionCard("genius"), db)
     assert new.pending == (PendingEffect("wonder_stage", 2),)
     # 阶段费 3 折扣 2 后为 1, 恰可支付; 0 行动点
-    assert legal_actions(db, new) == [BuildWonderStage(), PassTurn()]
+    assert legal_actions(db, new) == [
+        BuildWonderStage(), DeclineResponse(), PassTurn()]
     new2 = apply(new, BuildWonderStage(), db)
     p2 = new2.players[0]
     assert new2.pending == ()

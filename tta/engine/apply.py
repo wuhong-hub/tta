@@ -1,9 +1,12 @@
-"""动作应用(官方规则 P1 + P2 相位化).
+"""动作应用(官方规则 P1 + P2 相位化/政治阶段).
 
 apply(state, action, db) 返回新 GameState, 不改动入参(嵌套 dict 整体复制)。
 合法性统一经 legal_actions 成员判定; 非法动作抛 IllegalActionError。
 PassTurn(仅 ACTION 相位合法)交由 turn.advance 执行官方回合推进
-(见 tta/engine/turn.py); SkipPolitics 将相位 POLITICS -> ACTION。
+(见 tta/engine/turn.py); SkipPolitics 将相位 POLITICS -> ACTION;
+SeedEvent 走 politics.seed_event(筹划 + 揭示 + 事件结算); 事件选择 pending
+由 ChooseEventOption(events.apply_event_choice)或 DeclineResponse(丢弃
+pending[0], 仅可放弃白名单 kind)结算。
 行动者 = pending[0].responder(None 时为 current_player, 见
 state.acting_index): 响应期由 responder 结算 pending, pop 后控制权
 自然恢复为 current_player。
@@ -11,12 +14,14 @@ state.acting_index): 响应期由 responder 结算 pending, pop 后控制权
 
 from dataclasses import replace
 
-from tta.engine import effects, turn
+from tta.engine import effects, events, politics, turn
 from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
+    ChooseEventOption,
     CopyTactics,
+    DeclineResponse,
     Destroy,
     DevelopGovernment,
     DevelopTech,
@@ -28,6 +33,7 @@ from tta.engine.actions import (
     PlayActionCard,
     PlayLeader,
     PlayTactics,
+    SeedEvent,
     SkipPolitics,
     TakeCard,
     Upgrade,
@@ -55,6 +61,13 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return turn.advance(state, db)
     if isinstance(action, SkipPolitics):
         return replace(state, phase=Phase.ACTION)
+    if isinstance(action, DeclineResponse):
+        # 放弃首个 pending(白名单由 legal 保证); 仅丢弃 pending[0]
+        return replace(state, pending=state.pending[1:])
+    if isinstance(action, SeedEvent):
+        return politics.seed_event(db, state, action)
+    if isinstance(action, ChooseEventOption):
+        return events.apply_event_choice(db, state, action.option)
     if isinstance(action, TakeCard):
         return _take_card(db, state, action)
     if isinstance(action, DevelopTech):
@@ -209,10 +222,14 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
     idx = acting_index(state)
     p = state.players[idx]
     card = db.get(action.card_id)
-    free, science_gain = False, 0
+    free, science_gain, science_discount = False, 0, 0
     if state.pending and state.pending[0].kind == effects.KIND_DEVELOP_TECH:
-        # breakthrough pending 子行动: 0 行动点, 全价研发后 +science_gain 科技
-        free, science_gain = True, state.pending[0].science_gain
+        # develop_tech pending 子行动: 0 行动点; breakthrough 全价研发后
+        # +science_gain 科技, 事件选项(development_of_civilization)带
+        # 科技费折扣(discount)
+        free = True
+        science_gain = state.pending[0].science_gain
+        science_discount = state.pending[0].discount
         state = replace(state, pending=state.pending[1:])
     p = _remove_from_hand(p, action.card_id)
     if not free:
@@ -220,7 +237,11 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
             p = _spend_point(p, military=True)
         else:
             p = _spend_civil(db, p, 1)
-    p = replace(p, science=p.science - card.cost_science + science_gain,
+    science_cost = (
+        max(0, card.cost_science - science_discount)
+        if free else card.cost_science
+    )
+    p = replace(p, science=p.science - science_cost + science_gain,
                 developed=p.developed + (action.card_id,))
     if card.category is CardCategory.SPECIAL:
         # 官方规则: 同类型特殊科技两张并存 -> 等级较低者立即从游戏中移除
@@ -257,6 +278,14 @@ def _build(db: CardDB, state: GameState, card_id: str) -> GameState:
     idx = acting_index(state)
     p = state.players[idx]
     card = db.get(card_id)
+    if state.pending and (
+        events.EVENT_FREE_BUILD.get(state.pending[0].kind) == card_id
+    ):
+        # 事件免费建造(development_of_religion/warfare): 0 行动点 0 费用
+        state = replace(state, pending=state.pending[1:])
+        p = replace(p, worker_pool=p.worker_pool - 1)
+        p = _add_worker(p, card.category, card_id, +1)
+        return _update(state, idx, p)
     free, discount, state = _match_build_pending(state, card.category)
     if not free:
         if card.category in UNIT_CATEGORIES:

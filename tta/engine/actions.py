@@ -85,7 +85,71 @@ class IncreasePopulation:
 
 @dataclass(frozen=True)
 class SkipPolitics:
-    """跳过政治阶段: phase POLITICS -> ACTION(政治动作 P2 后续任务加入)."""
+    """跳过政治阶段: phase POLITICS -> ACTION."""
+
+
+@dataclass(frozen=True)
+class DeclineResponse:
+    """放弃当前可选 pending(仅"可放弃"白名单 kind, 见 effects/events 的
+    DECLINABLE_PENDING_KINDS); 效果 = 丢弃 pending[0](P2-T1 审查交接).
+
+    用于"响应方无合法响应"场景防卡死; 强制类 pending(如 discard_military,
+    恒有可执行动作)不可放弃。
+    """
+
+
+@dataclass(frozen=True)
+class SeedEvent:
+    """筹划事件(政治行动, 每回合限 1): 军事手牌中的 EVENT 卡面朝下压入
+    future_events 顶, 并揭示 current_events 顶牌结算(见 politics.seed_event)."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class PlayAggression:
+    """打出侵略牌(类型与序列化 P2-T5; 结算 T8)."""
+
+    card_id: str
+    target: int
+
+
+@dataclass(frozen=True)
+class DeclareWar:
+    """宣告战争(类型与序列化 P2-T5; 结算 T9)."""
+
+    card_id: str
+    target: int
+
+
+@dataclass(frozen=True)
+class ProposePact:
+    """提议条约(类型与序列化 P2-T5; 结算 T10)."""
+
+    card_id: str
+    target: int
+
+
+@dataclass(frozen=True)
+class CancelPact:
+    """退出条约(类型与序列化 P2-T5; 结算 T10)."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class Resign:
+    """退出(殖民竞拍等场景; 类型与序列化 P2-T5, 结算 T7 等后续任务)."""
+
+
+@dataclass(frozen=True)
+class ChooseEventOption:
+    """事件选择 pending 的决策(如 development_of_markets 的 food/resource).
+
+    option 合法取值由 pending kind 决定(见 legal._pending_actions)。
+    """
+
+    option: str
 
 
 @dataclass(frozen=True)
@@ -119,6 +183,8 @@ Action = (
     | Disband | PlayLeader | BuildWonderStage | PlayActionCard
     | IncreasePopulation | SkipPolitics | DiscardMilitary
     | PlayTactics | CopyTactics | PassTurn
+    | DeclineResponse | SeedEvent | PlayAggression | DeclareWar
+    | ProposePact | CancelPact | Resign | ChooseEventOption
 )
 
 _ACTION_TYPES: dict[str, type] = {
@@ -138,6 +204,14 @@ _ACTION_TYPES: dict[str, type] = {
     "play_tactics": PlayTactics,
     "copy_tactics": CopyTactics,
     "pass": PassTurn,
+    "decline_response": DeclineResponse,
+    "seed_event": SeedEvent,
+    "play_aggression": PlayAggression,
+    "declare_war": DeclareWar,
+    "propose_pact": ProposePact,
+    "cancel_pact": CancelPact,
+    "resign": Resign,
+    "choose_event_option": ChooseEventOption,
 }
 _TYPE_NAMES: dict[type, str] = {v: k for k, v in _ACTION_TYPES.items()}
 
