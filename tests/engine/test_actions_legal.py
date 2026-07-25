@@ -11,6 +11,7 @@ from tta.engine.actions import (
     DevelopGovernment,
     DevelopTech,
     Disband,
+    IncreasePopulation,
     PassTurn,
     PlayActionCard,
     PlayLeader,
@@ -137,6 +138,7 @@ _ALL_ACTIONS: list[Action] = [
     PlayLeader("leader_a"),
     BuildWonderStage(),
     PlayActionCard("tactics_test"),
+    IncreasePopulation(),
     PassTurn(),
 ]
 
@@ -420,6 +422,33 @@ def test_build_wonder_stage_legality() -> None:
     # 无在建奇迹
     p = _player(card_tokens={"bronze": 3}, civil_actions=1)
     assert BuildWonderStage() not in legal_actions(db, _state(p))
+
+
+def test_increase_population_legality() -> None:
+    db = _db()
+    # yellow_bank=18 -> 人口费 2, 2 食物足够
+    base = dict(developed=("agriculture",), card_tokens={"agriculture": 2},
+                yellow_bank=18)
+    p = _player(**base)
+    assert IncreasePopulation() in legal_actions(db, _state(p))
+    # 食物不足支付人口费
+    p = _player(**{**base, "card_tokens": {"agriculture": 1}})
+    assert IncreasePopulation() not in legal_actions(db, _state(p))
+    # 黄点银行为空
+    p = _player(**{**base, "yellow_bank": 0})
+    assert IncreasePopulation() not in legal_actions(db, _state(p))
+    # 无白点
+    p = _player(civil_actions=0, **base)
+    assert IncreasePopulation() not in legal_actions(db, _state(p))
+
+
+def test_increase_population_not_generated_round_one() -> None:
+    db = _db()
+    # 第一回合仅 TakeCard + PassTurn, 即使满足增人口条件也不生成
+    p = _player(developed=("agriculture",), card_tokens={"agriculture": 2},
+                yellow_bank=18)
+    state = _state(p, card_row=_row("bronze"), round=1)
+    assert IncreasePopulation() not in legal_actions(db, state)
 
 
 def test_play_action_card_requires_registered_handler(

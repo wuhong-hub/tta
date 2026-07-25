@@ -13,13 +13,14 @@ from tta.engine.actions import (
     DevelopTech,
     Disband,
     IllegalActionError,
+    IncreasePopulation,
     PassTurn,
     PlayActionCard,
     PlayLeader,
     TakeCard,
     Upgrade,
 )
-from tta.engine.apply import apply
+from tta.engine.apply import _spend_civil, apply
 from tta.engine.enums import Age, CardCategory, DeckType
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
 from tta.engine.state import ROW_SLOTS, GameState, PlayerState, replace_player
@@ -285,6 +286,44 @@ def test_play_action_card_framework(monkeypatch: pytest.MonkeyPatch) -> None:
     assert new.players[0].hand_civil == ()
     assert new.players[0].civil_actions == 3
     assert new.discard == ("tactics_test",)
+
+
+def test_increase_population_apply() -> None:
+    db = _db()
+    # yellow_bank=18 -> 人口费 2: 扣 1 白点 + 2 食物, 银行 -1, 空闲 +1
+    p = _player(developed=("agriculture",), card_tokens={"agriculture": 2},
+                yellow_bank=18, worker_pool=1)
+    new = apply(_state(p), IncreasePopulation(), db)
+    p0 = new.players[0]
+    assert p0.civil_actions == 3
+    assert p0.card_tokens == {}
+    assert p0.yellow_bank == 17
+    assert p0.worker_pool == 2
+
+
+def test_increase_population_track_cost_varies_with_bank() -> None:
+    db = _db()
+    # yellow_bank=16 -> 区段(13-16)人口费 3
+    p = _player(developed=("agriculture",), card_tokens={"agriculture": 3},
+                yellow_bank=16, worker_pool=1)
+    new = apply(_state(p), IncreasePopulation(), db)
+    p0 = new.players[0]
+    assert p0.card_tokens == {}
+    assert p0.yellow_bank == 15
+    assert p0.worker_pool == 2
+
+
+def test_spend_civil_red_padding_requires_hammurabi() -> None:
+    db = _db()
+    # 无 hammurabi: 白点不足时防御性抛错(正常流程由 legal 拦截)
+    p = _player(civil_actions=1, military_actions=2)
+    with pytest.raises(IllegalActionError):
+        _spend_civil(db, p, 2)
+    # hammurabi: 红点 1:1 垫付
+    p = _player(civil_actions=1, military_actions=2, leader="hammurabi")
+    new = _spend_civil(db, p, 2)
+    assert new.civil_actions == 0
+    assert new.military_actions == 1
 
 
 def test_apply_does_not_mutate_input() -> None:

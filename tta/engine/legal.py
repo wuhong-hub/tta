@@ -4,8 +4,8 @@ legal_actions(db, state) 枚举当前玩家的全部合法动作:
 - 终局 -> []; pending 非空 -> 仅可结算首个 pending 的动作 + PassTurn;
 - 第一回合(state.round == 1) -> 仅 TakeCard + 末尾 PassTurn;
 - 其余情况: TakeCard / DevelopTech / DevelopGovernment / Build / Upgrade /
-  Destroy / Disband / PlayLeader / BuildWonderStage / PlayActionCard,
-  PassTurn 恒在末尾。
+  Destroy / Disband / PlayLeader / BuildWonderStage / PlayActionCard /
+  IncreasePopulation, PassTurn 恒在末尾。
 
 pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0)。
 回合修饰(turn_discounts): 目前仅兵种的 "unit_build" 建造折扣。
@@ -25,6 +25,7 @@ from tta.engine.actions import (
     DevelopGovernment,
     DevelopTech,
     Disband,
+    IncreasePopulation,
     PassTurn,
     PlayActionCard,
     PlayLeader,
@@ -280,6 +281,15 @@ def _pending_actions(
     return []
 
 
+def _increase_population_actions(db: CardDB, p: PlayerState) -> list[Action]:
+    """增人口: 1 白点 + 黄点银行非空 + 食物足以支付人口费(moses -1)."""
+    if p.civil_actions < 1:
+        return []
+    if not effects.can_increase_population(db, p):
+        return []
+    return [IncreasePopulation()]
+
+
 def _action_card_actions(db: CardDB, p: PlayerState) -> list[Action]:
     actions: list[Action] = []
     if p.civil_actions < 1:
@@ -330,6 +340,7 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
     actions.extend(_destroy_disband_actions(p))
     actions.extend(_leader_actions(db, p))
     actions.extend(_wonder_actions(db, p))
+    actions.extend(_increase_population_actions(db, p))
     actions.extend(_action_card_actions(db, p))
     actions.append(PassTurn())
     return actions

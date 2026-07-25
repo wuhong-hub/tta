@@ -16,6 +16,7 @@ from tta.engine.actions import (
     BuildWonderStage,
     DevelopTech,
     IllegalActionError,
+    IncreasePopulation,
     PassTurn,
     PlayActionCard,
     PlayLeader,
@@ -173,6 +174,7 @@ def test_age_a_wonder_definitions(db: CardDB) -> None:
     assert db.get("hanging_gardens").wonder_bonus == {"culture": 1, "happiness": 2}
     assert db.get("library_of_alexandria").wonder_stages == (1, 4, 1)
     assert db.get("library_of_alexandria").wonder_bonus == {
+        "culture": 1, "science": 1,
         "civil_hand_extra": 1, "military_hand_extra": 1,
     }
 
@@ -180,13 +182,30 @@ def test_age_a_wonder_definitions(db: CardDB) -> None:
 def test_wonder_bonuses_in_civ(db: CardDB) -> None:
     p = _player(wonders=WONDER_IDS)
     civ = civ_values(db, p)
-    assert civ.culture_rate == 1          # hanging_gardens
+    assert civ.culture_rate == 2          # hanging_gardens + library_of_alexandria
+    assert civ.science_rate == 1          # library_of_alexandria
     assert civ.happiness == 2             # hanging_gardens
     assert civ.civil_actions == 4 + 1     # pyramids
     assert civ.strength == 2              # colossus
     assert civ.colonization == 1          # colossus
     assert civ.military_hand_extra == 1   # library_of_alexandria
     assert hand_limit_civil(db, p) == 5 + 1  # 内政手牌上限 +1
+
+
+def test_library_of_alexandria_produces_after_completion(db: CardDB) -> None:
+    """端到端: 建完 3 阶段(1/4/1)后文化/科技增速各 +1."""
+    p = _player(wonder_progress=("library_of_alexandria", 0),
+                developed=("bronze",), card_tokens={"bronze": 6},
+                blue_bank=16)
+    state = _state(p)
+    for _ in range(3):
+        state = apply(state, BuildWonderStage(), db)
+    p0 = state.players[0]
+    assert p0.wonders == ("library_of_alexandria",)
+    assert p0.wonder_progress is None
+    civ = civ_values(db, p0)
+    assert civ.culture_rate == 1
+    assert civ.science_rate == 1
 
 
 # --- 行动卡 handler 注册 ------------------------------------------------------
@@ -369,6 +388,21 @@ def test_hammurabi_leader_take_discount(db: CardDB) -> None:
     assert TakeCard(5) not in legal_actions(db, _state(other, card_row=row))
 
 
+def test_hammurabi_take_leader_discount_apply_no_red_padding(db: CardDB) -> None:
+    """修复回归: apply 侧同样扣减领袖拿牌费, 差额不得再从红点垫付.
+
+    hammurabi 玩家 1 白点拿 5 号位(2 费)领袖: 折扣后实付 1 白点,
+    结算后白点归零且红点不变。
+    """
+    row = _row(None, None, None, None, None, "moses")
+    p = _player(leader="hammurabi", civil_actions=1, military_actions=2)
+    new = apply(_state(p, card_row=row), TakeCard(5), db)
+    p0 = new.players[0]
+    assert p0.civil_actions == 0
+    assert p0.military_actions == 2
+    assert p0.hand_civil == ("moses",)
+
+
 def test_hammurabi_flexible_red_as_white_take_card(db: CardDB) -> None:
     """SIMPLIFICATION: 白点不足支付白点费用时可用红点 1:1 垫付."""
     row = _row(None, None, None, None, None, "stockpile")
@@ -405,6 +439,20 @@ def test_aristotle_take_technology_gains_science(db: CardDB) -> None:
     new2 = apply(new, TakeCard(1), db)
     assert new2.players[0].science == 1
     assert new2.players[0].hand_civil == ("agriculture", "stockpile")
+
+
+def test_moses_discount_in_increase_population(db: CardDB) -> None:
+    """moses: IncreasePopulation 动作食物费 -1(银行 18 时 2 -> 1)."""
+    p = _player(leader="moses", developed=("agriculture",),
+                card_tokens={"agriculture": 1}, yellow_bank=18, worker_pool=1)
+    state = _state(p)
+    assert IncreasePopulation() in legal_actions(db, state)
+    new = apply(state, IncreasePopulation(), db)
+    p0 = new.players[0]
+    assert p0.civil_actions == 3
+    assert p0.card_tokens == {}
+    assert p0.yellow_bank == 17
+    assert p0.worker_pool == 2
 
 
 def test_julius_caesar_end_to_end_via_civ_values(db: CardDB) -> None:

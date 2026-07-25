@@ -114,8 +114,10 @@ HANGING_GARDENS = _wonder(
 
 LIBRARY_OF_ALEXANDRIA = _wonder(
     "library_of_alexandria", "亚历山大图书馆", "Library of Alexandria",
-    (1, 4, 1), {"civil_hand_extra": 1, "military_hand_extra": 1},
-    "你的内政与军事手牌上限各 +1。",
+    (1, 4, 1),
+    {"culture": 1, "science": 1,
+     "civil_hand_extra": 1, "military_hand_extra": 1},
+    "+1 文化, +1 科技; 你的内政与军事手牌上限各 +1。",
 )
 
 WONDERS: tuple[CardDefinition, ...] = (

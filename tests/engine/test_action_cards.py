@@ -70,6 +70,7 @@ def _db() -> CardDB:
         "rich_land": _card("rich_land", CardCategory.ACTION, handler="rich_land"),
         "patriotism": _card("patriotism", CardCategory.ACTION, handler="patriotism"),
         "genius": _card("genius", CardCategory.ACTION, handler="engineering_genius"),
+        "frugality": _card("frugality", CardCategory.ACTION, handler="frugality"),
         "mystery": _card("mystery", CardCategory.ACTION, handler="unregistered"),
     }
     return CardDB(cards=cards, initial_tableau=("agriculture", "philosophy"),
@@ -281,6 +282,23 @@ def test_engineering_genius_wonder_stage() -> None:
     assert p2.card_tokens == {}
     assert p2.blue_bank == 15
     assert p2.civil_actions == 3  # 仅打出卡扣 1 白点, 子行动不扣
+
+
+def test_frugality_reuses_shared_increase_population() -> None:
+    """frugality 回归: 真实注册 handler 复用增人口共用结算(付人口费), 再 +1 食物."""
+    db = _db()
+    p = _player(hand_civil=("frugality",), developed=("agriculture",),
+                card_tokens={"agriculture": 2}, yellow_bank=18, worker_pool=1,
+                blue_bank=16)
+    state = _state(p)
+    assert PlayActionCard("frugality") in legal_actions(db, state)
+    new = apply(state, PlayActionCard("frugality"), db)
+    p0 = new.players[0]
+    assert p0.yellow_bank == 17
+    assert p0.worker_pool == 2
+    assert p0.card_tokens == {"agriculture": 1}  # 付人口费 2 再得 1
+    assert p0.civil_actions == 3
+    assert new.discard == ("frugality",)
 
 
 @pytest.mark.usefixtures("handlers")

@@ -74,13 +74,19 @@ class PlayActionCard:
 
 
 @dataclass(frozen=True)
+class IncreasePopulation:
+    """增加人口: 1 白点 + 黄点轨道人口费(moses -1 食物), 黄点银行 -1, 空闲工人 +1."""
+
+
+@dataclass(frozen=True)
 class PassTurn:
     """结束本回合行动阶段(回合推进见 Task 8)."""
 
 
 Action = (
     TakeCard | DevelopTech | DevelopGovernment | Build | Upgrade | Destroy
-    | Disband | PlayLeader | BuildWonderStage | PlayActionCard | PassTurn
+    | Disband | PlayLeader | BuildWonderStage | PlayActionCard
+    | IncreasePopulation | PassTurn
 )
 
 _ACTION_TYPES: dict[str, type] = {
@@ -94,6 +100,7 @@ _ACTION_TYPES: dict[str, type] = {
     "play_leader": PlayLeader,
     "build_wonder_stage": BuildWonderStage,
     "play_action_card": PlayActionCard,
+    "increase_population": IncreasePopulation,
     "pass": PassTurn,
 }
 _TYPE_NAMES: dict[type, str] = {v: k for k, v in _ACTION_TYPES.items()}

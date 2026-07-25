@@ -17,6 +17,7 @@ from tta.engine.actions import (
     DevelopTech,
     Disband,
     IllegalActionError,
+    IncreasePopulation,
     PassTurn,
     PlayActionCard,
     PlayLeader,
@@ -67,6 +68,8 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return _build_wonder_stage(db, state)
     if isinstance(action, PlayActionCard):
         return _play_action_card(db, state, action)
+    if isinstance(action, IncreasePopulation):
+        return _increase_population(db, state)
     msg = f"未知动作类型: {action!r}"  # pragma: no cover
     raise IllegalActionError(msg)  # pragma: no cover
 
@@ -86,11 +89,15 @@ def _spend_civil(db: CardDB, p: PlayerState, cost: int) -> PlayerState:
 
     hammurabi SIMPLIFICATION: 仅 TakeCard / DevelopTech / Build / Upgrade
     四处挂钩(与 legal 一致), 其余白点花费(PlayLeader / Destroy /
-    BuildWonderStage 等)不垫付。垫付上限由 legal 保证。
+    BuildWonderStage 等)不垫付。垫付上限由 legal 保证; 防御性校验:
+    无垫付资格(非 hammurabi)或红点不足以覆盖差额时抛 IllegalActionError。
     """
     deficit = cost - p.civil_actions
     if deficit <= 0:
         return replace(p, civil_actions=p.civil_actions - cost)
+    if effects.flexible_actions(db, p) < deficit:
+        msg = f"白点不足且无红点垫付资格(hammurabi): 需垫付 {deficit}"
+        raise IllegalActionError(msg)
     return replace(
         p, civil_actions=0, military_actions=p.military_actions - deficit)
 
@@ -124,6 +131,9 @@ def _take_card(db: CardDB, state: GameState, action: TakeCard) -> GameState:
     cost = ROW_COSTS[action.row_index]
     if card.category is CardCategory.WONDER:
         cost += len(p.wonders)
+    if card.category is CardCategory.LEADER:
+        # hammurabi: 拿领袖牌 -1 白点(与 legal._take_card_legal 同口径)
+        cost = max(0, cost - effects.leader_take_discount(db, p))
     row = list(state.card_row)
     row[action.row_index] = None
     state = replace(state, card_row=tuple(row))
@@ -275,6 +285,18 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
         p = replace(p, wonders=p.wonders + (card_id,), wonder_progress=None)
     else:
         p = replace(p, wonder_progress=(card_id, stages_done))
+    return _update(state, p)
+
+
+def _increase_population(db: CardDB, state: GameState) -> GameState:
+    """增人口: 1 白点 + 食物人口费(moses -1), 黄点银行 -1, 空闲工人 +1.
+
+    结算与 frugality 行动卡共用 effects.increase_population(effects 不得
+    import apply, 故共用函数置于 effects)。
+    """
+    p = state.players[state.current_player]
+    p = _spend_point(p, military=False)
+    p = effects.increase_population(db, p)
     return _update(state, p)
 
 

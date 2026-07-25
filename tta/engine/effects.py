@@ -18,7 +18,8 @@ Age A 领袖钩子(Task 9):
   静态加成(经 civ_values 生效);
 - homer: turn_start_discounts 在每回合行动点恢复时注入 unit_build 折扣;
 - moses: population_food_discount 使增人口食物费 -1(挂钩于
-  increase_population, 当前唯一调用点为 frugality handler);
+  increase_population, 调用点为 IncreasePopulation 动作(apply)与
+  frugality handler);
 - hammurabi: leader_take_discount 使拿领袖牌 -1 白点; flexible_actions
   实现"红点当白点"(SIMPLIFICATION 见函数 docstring);
 - aristotle: on_take_card_gains 在 apply TakeCard 结算时 +1 科技。
@@ -169,10 +170,10 @@ def can_increase_population(db: CardDB, p: PlayerState) -> bool:
 
 
 def increase_population(db: CardDB, p: PlayerState) -> PlayerState:
-    """增人口: 支付食物费(含 moses 折扣), 黄点银行 -1, 空闲工人 +1.
+    """增人口结算(共用): 支付食物费(含 moses 折扣), 黄点银行 -1, 空闲工人 +1.
 
-    引擎尚无独立"增人口"动作(P1 动作集未含), 当前唯一调用点为
-    frugality 行动卡 handler; 未来增人口动作应复用本函数。
+    调用点: apply 的 IncreasePopulation 动作(另扣 1 白点)与 frugality
+    行动卡 handler(不扣行动点)。本函数不含行动点扣减。
     """
     p = economy.pay(db, p, "food", increase_population_cost(db, p))
     return replace(p, yellow_bank=p.yellow_bank - 1,
