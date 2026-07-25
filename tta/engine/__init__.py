@@ -1,4 +1,4 @@
-"""规则引擎公开接口(P1 重构中: tracks/enums/model/rng/state/actions/legal/apply)."""
+"""规则引擎公开接口(P1: tracks/enums/model/rng/state/actions/legal/apply/setup)."""
 
 from tta.engine.actions import (
     Action,
@@ -30,6 +30,7 @@ from tta.engine.enums import (
 from tta.engine.legal import ROW_COSTS, legal_actions
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
 from tta.engine.rng import rng_below, rng_shuffle
+from tta.engine.setup import new_game
 from tta.engine.state import (
     ROW_SLOTS,
     GameState,
@@ -57,7 +58,7 @@ __all__ = [
     "PlayActionCard", "PlayLeader", "PlayerState", "SpecialType", "TakeCard",
     "Upgrade", "action_from_dict", "action_to_dict", "apply",
     "consumption_value", "corruption_value", "from_dict",
-    "happiness_required", "legal_actions", "population_cost",
+    "happiness_required", "legal_actions", "new_game", "population_cost",
     "replace_player", "rng_below", "rng_shuffle", "state_hash", "to_dict",
     "workers_total",
 ]

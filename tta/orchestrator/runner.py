@@ -43,7 +43,7 @@ def run_game(db: CardDB, players: Sequence[Player], seed: int,
     while not state.terminal:
         if steps >= MAX_STEPS:
             raise RuntimeError(f"step limit {MAX_STEPS} exceeded")
-        legal = legal_actions(state, db)
+        legal = legal_actions(db, state)
         actor = players[state.current_player]
         action = actor.choose(state, legal, db)
         if action not in legal:

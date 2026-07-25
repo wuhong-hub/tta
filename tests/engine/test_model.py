@@ -131,6 +131,25 @@ def test_deck_for_invalid_players() -> None:
         db.deck_for(Age.A, 5)
 
 
+def test_deck_for_filters_deck_type() -> None:
+    """deck_for 默认只取 CIVIL 卡(P2 军事卡入库后防御)."""
+    db = _sample_db()
+    military = CardDefinition(
+        id="warriors_m", name="武士", name_en="Warriors",
+        age=Age.A, deck=DeckType.MILITARY, category=CardCategory.INFANTRY,
+        quantities=(2, 2, 2),
+    )
+    db = CardDB(
+        cards={**db.cards, military.id: military},
+        initial_tableau=db.initial_tableau,
+        initial_government=db.initial_government,
+    )
+    assert "warriors_m" not in db.deck_for(Age.A, 2)
+    assert db.deck_for(Age.A, 2, DeckType.MILITARY) == (
+        "warriors_m", "warriors_m",
+    )
+
+
 def test_card_db_get() -> None:
     db = _sample_db()
     assert db.get("bronze").name_en == "Bronze"

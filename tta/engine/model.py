@@ -57,15 +57,19 @@ class CardDB:
     cards: dict[str, CardDefinition]
     initial_tableau: tuple[str, ...]   # 每名玩家开局已研发的建筑卡 id(含重复)
     initial_government: str            # 开局政体卡 id
+    initial_workers: tuple[tuple[str, int], ...] = ()
+    """开局各初始科技卡上的工人数((card_id, 数量) 对, 0 工人的卡不在列)."""
 
     def get(self, card_id: str) -> CardDefinition:
         """按 id 取卡牌定义."""
         return self.cards[card_id]
 
-    def deck_for(self, age: Age, num_players: int) -> tuple[str, ...]:
+    def deck_for(self, age: Age, num_players: int,
+                 deck_type: DeckType = DeckType.CIVIL) -> tuple[str, ...]:
         """按 quantities 组成指定时代、指定人数的牌堆(卡牌 id, 含重复).
 
         顺序为 cards 的插入序; num_players 须在 [MIN_PLAYERS, MAX_PLAYERS].
+        deck_type 默认 CIVIL(P1 牌库仅内政卡; P2 军事卡入库后须显式过滤).
         """
         if not MIN_PLAYERS <= num_players <= MAX_PLAYERS:
             msg = f"num_players 须在 {MIN_PLAYERS}-{MAX_PLAYERS}, 收到 {num_players}"
@@ -73,6 +77,6 @@ class CardDB:
         idx = num_players - MIN_PLAYERS
         ids: list[str] = []
         for card in self.cards.values():
-            if card.age is age:
+            if card.age is age and card.deck is deck_type:
                 ids.extend([card.id] * card.quantities[idx])
         return tuple(ids)

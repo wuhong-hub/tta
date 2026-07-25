@@ -9,7 +9,12 @@ from tta.cards.age_a import AGE_A_CARDS
 from tta.cards.age_i import AGE_I_CARDS
 from tta.cards.age_ii import AGE_II_CARDS
 from tta.cards.age_iii import AGE_III_CARDS
-from tta.cards.initial import INITIAL_CARDS, INITIAL_GOVERNMENT, INITIAL_TABLEAU
+from tta.cards.initial import (
+    INITIAL_CARDS,
+    INITIAL_GOVERNMENT,
+    INITIAL_TABLEAU,
+    INITIAL_WORKERS,
+)
 from tta.engine.model import CardDB
 
 __all__ = ["build_card_db"]
@@ -28,4 +33,5 @@ def build_card_db() -> CardDB:
         cards=cards,
         initial_tableau=INITIAL_TABLEAU,
         initial_government=INITIAL_GOVERNMENT,
+        initial_workers=tuple(INITIAL_WORKERS.items()),
     )
