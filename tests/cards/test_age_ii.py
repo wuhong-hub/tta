@@ -334,6 +334,23 @@ def test_justice_system_develop_gains_blue_tokens(db: CardDB) -> None:
     assert new2.players[0].blue_bank == 13
 
 
+def test_justice_system_replaces_code_of_laws(db: CardDB) -> None:
+    """官方规则: 同类型(LAW)特殊科技两张并存时, 等级较低者立即入 removed.
+
+    code_of_laws(时代 I) + justice_system(时代 II) -> 只留后者,
+    前者入 removed(保持卡牌守恒)。
+    """
+    p = _player(hand_civil=("justice_system",), science=7,
+                developed=("code_of_laws",))
+    new = apply(_state(p), DevelopTech("justice_system"), db)
+    p0 = new.players[0]
+    assert p0.developed == ("justice_system",)
+    assert new.removed == ("code_of_laws",)
+    # code_of_laws 静态加成随移除失效
+    civ = civ_values(db, p0)
+    assert civ.civil_actions == 4 + 1
+
+
 def test_navigation_static_bonus(db: CardDB) -> None:
     """navigation: +2 殖民修正 +3 军力."""
     civ = civ_values(db, _player(developed=("navigation",)))

@@ -21,7 +21,8 @@ advance(state, db) 流程:
      入弃牌堆; 过期领袖入 removed 并清 None, leader_ages 保留; 过期未完成
      奇迹已付阶段蓝点退回 blue_bank 后入 removed) -> 每人 yellow_bank -2
      (下限 0) -> 启用下一时代牌堆继续补;
-   - 时代 III 牌堆尽 -> 时代 IV: 停止补牌; 时代 IV 无牌堆但回合开始仍
+   - 时代 III 牌堆尽 -> 时代 IV: 先执行与 I/II 结束同一序列(过期处理 +
+     每人 yellow_bank -2, 下限 0), 再停止补牌; 时代 IV 无牌堆但回合开始仍
      弃最左 N 张并左移, 右侧空位保持空;
      起始玩家回合开启 IV -> 本轮为最后一轮, 否则下一轮为最后一轮。
 """
@@ -165,23 +166,20 @@ def _refill(state: GameState, db: CardDB) -> GameState:
 
 def _end_current_age(state: GameState, db: CardDB) -> GameState:
     if state.age is Age.III:
-        return _enter_age_four(state)
+        return _enter_age_four(state, db)
     return _end_age(state, db)
 
 
-def _end_age(state: GameState, db: CardDB) -> GameState:
-    """时代 A/I/II 结束: 余牌移除 -> 过期处理 -> 启用新牌堆.
+def _age_end_cleanup(
+    state: GameState, db: CardDB, ended: Age,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[PlayerState, ...]]:
+    """时代结束共有序列: 过期处理 + 每人 -2 黄点(时代 A 结束不执行).
 
-    官方规则: 每人 -2 黄点仅在时代 I/II/III 结束时执行; 时代 A 结束
-    "nothing else happens"(无过期, 也无黄点损失)。
+    过期处理: 更早时代手牌入弃牌堆; 过期领袖入 removed 并清 None
+    (leader_ages 保留); 过期未完成奇迹已付阶段蓝点退回 blue_bank 后
+    入 removed。返回 (removed, discard, players) 供调用方组装新状态。
     """
-    ended = state.age
-    new_age = ended.next()
-    if new_age is None:  # pragma: no cover - III 由 _enter_age_four 处理
-        msg = "时代 III 的结束应走 _enter_age_four"
-        raise AssertionError(msg)
-    # 当前牌堆余牌入 removed(时代 A 结束的核心; I/II 结束时牌堆已空)
-    removed = state.removed + state.civil_deck
+    removed = state.removed
     discard = state.discard
     players: list[PlayerState] = []
     for p in state.players:
@@ -209,6 +207,24 @@ def _end_age(state: GameState, db: CardDB) -> GameState:
             p = replace(
                 p, yellow_bank=max(0, p.yellow_bank - AGE_END_YELLOW_LOSS))
         players.append(p)
+    return removed, discard, tuple(players)
+
+
+def _end_age(state: GameState, db: CardDB) -> GameState:
+    """时代 A/I/II 结束: 余牌移除 -> 过期处理与 -2 黄点 -> 启用新牌堆.
+
+    官方规则: 每人 -2 黄点仅在时代 I/II/III 结束时执行; 时代 A 结束
+    "nothing else happens"(无过期, 也无黄点损失)。
+    """
+    ended = state.age
+    new_age = ended.next()
+    if new_age is None:  # pragma: no cover - III 由 _enter_age_four 处理
+        msg = "时代 III 的结束应走 _enter_age_four"
+        raise AssertionError(msg)
+    # 当前牌堆余牌入 removed(时代 A 结束的核心; I/II 结束时牌堆已空)
+    removed = state.removed + state.civil_deck
+    state = replace(state, removed=removed)
+    removed, discard, players = _age_end_cleanup(state, db, ended)
     future = dict(state.future_decks)
     new_deck = future.pop(new_age.value, ())
     return replace(
@@ -218,7 +234,7 @@ def _end_age(state: GameState, db: CardDB) -> GameState:
         future_decks=future,
         removed=removed,
         discard=discard,
-        players=tuple(players),
+        players=players,
     )
 
 
@@ -227,7 +243,20 @@ def _is_obsolete(db: CardDB, card_id: str, ended: Age) -> bool:
     return _AGE_ORDER.index(db.get(card_id).age) < _AGE_ORDER.index(ended)
 
 
-def _enter_age_four(state: GameState) -> GameState:
-    """时代 III 牌堆尽 -> 时代 IV: 停止补牌; 起始玩家回合开启则本轮为最后轮."""
+def _enter_age_four(state: GameState, db: CardDB) -> GameState:
+    """时代 III 结束: 过期处理与 -2 黄点(同 I/II 结束序列) -> 时代 IV.
+
+    官方规则: 时代 I/II/III 结束执行同一序列(过期处理 + 每人 -2 黄点,
+    下限 0)。时代 IV 无牌堆: 停止补牌; 起始玩家回合开启则本轮为最后轮。
+    """
+    removed, discard, players = _age_end_cleanup(state, db, Age.III)
     last_round = state.last_round or state.current_player == 0
-    return replace(state, age=Age.IV, civil_deck=(), last_round=last_round)
+    return replace(
+        state,
+        age=Age.IV,
+        civil_deck=(),
+        removed=removed,
+        discard=discard,
+        players=players,
+        last_round=last_round,
+    )

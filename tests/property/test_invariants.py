@@ -3,17 +3,21 @@
 用 stdlib random 驱动随机合法动作, 跑 10 个种子的 2 人整局, 每步断言:
 
 1. 黄点守恒(每人): yellow_bank + worker_pool + 建筑工人数
-   = 25 − 2 × (已结束的时代 I/II 数)。
+   = 25 − 2 × (已结束的时代 I/II/III 数)。
    口径说明: 时代 A 结束官方规则 "nothing else happens"(无 −2),
-   时代 III 结束进入时代 IV 走 _enter_age_four(无 −2), 仅时代 I/II
-   结束各 −2(turn.py AGE_END_YELLOW_LOSS)。由 state.age 推断已结束的
-   时代 I/II 数: A/I -> 0, II -> 1, III/IV -> 2。引擎对 −2 做下限 0
-   截断(max(0, bank − 2)), 时代结束时 yellow_bank 实际恒 ≥ 2, 等号成立。
+   时代 I/II/III 结束各 −2(turn.py AGE_END_YELLOW_LOSS; III 结束进入
+   时代 IV 前在 _enter_age_four 执行同一序列)。由 state.age 推断已结束的
+   时代 I/II/III 数: A/I -> 0, II -> 1, III -> 2, IV -> 3。引擎对 −2 做
+   下限 0 截断(max(0, bank − 2)), 时代结束时 yellow_bank 实际恒 ≥ 2,
+   等号成立。
 2. 蓝点守恒(每人, 精确等号): blue_bank + Σ card_tokens + 进行中奇迹
-   已付阶段数 == 16 + 3 × (已研发 justice_system + civil_service 数)。
+   已付阶段数 == 16 + 3 × (本局已成功研发 justice_system +
+   civil_service 的次数, 由驱动循环按 DevelopTech 动作追踪)。
    官方规则: 支付(建造/升级/增人口/食物消耗/腐败)所花蓝点放回
    blue_bank, 奇迹完成时其上蓝点也放回 blue_bank, 总量守恒 = 16
-   (+ justice_system / civil_service 研发各从盒中 +3)。
+   (+ justice_system / civil_service 研发各从盒中 +3)。注意同类型
+   特殊科技替换会把等级较低者从 developed 移入 removed(官方规则),
+   但 +3 蓝点不退回, 故上限按"曾研发次数"而非"当前 developed"计。
 3. 资源非负: culture / science / civil_actions / military_actions ≥ 0,
    yellow_bank ∈ [0, 18], blue_bank ∈ [0, 蓝点上界], card_tokens ≥ 0。
 4. 卡牌守恒: 牌列 + 当前牌堆 + future_decks + 弃牌堆 + removed
@@ -30,6 +34,7 @@ from collections import Counter
 import pytest
 
 from tta.cards import build_card_db
+from tta.engine.actions import DevelopTech
 from tta.engine.apply import apply
 from tta.engine.enums import Age
 from tta.engine.legal import legal_actions
@@ -60,8 +65,8 @@ BLUE_GAIN_CARDS = ("justice_system", "civil_service")
 
 BLUE_GAIN_AMOUNT = 3
 
-_AGE_ENDED_I_II_COUNT = {Age.A: 0, Age.I: 0, Age.II: 1, Age.III: 2, Age.IV: 2}
-"""当前时代 -> 已结束的时代 I/II 数(时代 A 结束不扣黄点)."""
+_AGE_ENDED_YELLOW_LOSS_COUNT = {Age.A: 0, Age.I: 0, Age.II: 1, Age.III: 2, Age.IV: 3}
+"""当前时代 -> 已结束的时代 I/II/III 数(时代 A 结束不扣黄点)."""
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +113,7 @@ def _yellow_total(p: PlayerState) -> int:
 
 
 def _yellow_expected(age: Age) -> int:
-    return YELLOW_INITIAL_TOTAL - 2 * _AGE_ENDED_I_II_COUNT[age]
+    return YELLOW_INITIAL_TOTAL - 2 * _AGE_ENDED_YELLOW_LOSS_COUNT[age]
 
 
 def _blue_total(p: PlayerState) -> int:
@@ -119,21 +124,26 @@ def _blue_total(p: PlayerState) -> int:
     return total
 
 
-def _blue_ceiling(db, p: PlayerState) -> int:
-    """蓝点总量上界 = 16 + 3 × 已研发蓝点增益特殊科技数."""
-    gains = sum(1 for card_id in BLUE_GAIN_CARDS if card_id in p.developed)
-    return BLUE_INITIAL_TOTAL + BLUE_GAIN_AMOUNT * gains
+def _blue_ceiling(blue_gains: int) -> int:
+    """蓝点总量上界 = 16 + 3 × 曾研发蓝点增益特殊科技次数.
+
+    按"曾研发次数"计(驱动循环追踪): 同类型特殊科技替换会将等级较低者
+    移出 developed, 但研发时从盒中取的 +3 蓝点不退回。
+    """
+    return BLUE_INITIAL_TOTAL + BLUE_GAIN_AMOUNT * blue_gains
 
 
-def _assert_player_invariants(db, state: GameState, p: PlayerState) -> None:
+def _assert_player_invariants(
+    db, state: GameState, p: PlayerState, blue_gains: int,
+) -> None:
     # 黄点守恒(精确等号, 口径见模块 docstring)
     assert _yellow_total(p) == _yellow_expected(state.age), (
         f"{p.name} 黄点不守恒: {_yellow_total(p)} != "
         f"{_yellow_expected(state.age)} (age={state.age})"
     )
     # 蓝点精确守恒(支付/消耗/腐败/奇迹完成均放回供给区, 见模块 docstring)
-    assert _blue_total(p) == _blue_ceiling(db, p), (
-        f"{p.name} 蓝点不守恒: {_blue_total(p)} != {_blue_ceiling(db, p)}"
+    assert _blue_total(p) == _blue_ceiling(blue_gains), (
+        f"{p.name} 蓝点不守恒: {_blue_total(p)} != {_blue_ceiling(blue_gains)}"
     )
     # 资源/行动点非负, 银行区间
     assert p.culture >= 0
@@ -141,7 +151,7 @@ def _assert_player_invariants(db, state: GameState, p: PlayerState) -> None:
     assert p.civil_actions >= 0
     assert p.military_actions >= 0
     assert 0 <= p.yellow_bank <= 18
-    assert 0 <= p.blue_bank <= _blue_ceiling(db, p)
+    assert 0 <= p.blue_bank <= _blue_ceiling(blue_gains)
     assert all(count >= 0 for count in p.card_tokens.values())
 
 
@@ -150,13 +160,19 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
     state = new_game(db, 2, seed)
     rng = random.Random(seed)
     universe = _universe(db, 2)
+    blue_gains = [0, 0]
     steps = 0
     while not state.terminal:
         legal = legal_actions(db, state)
-        state = apply(state, rng.choice(legal), db)
+        action = rng.choice(legal)
+        if isinstance(action, DevelopTech) and action.card_id in BLUE_GAIN_CARDS:
+            # 研发 justice_system/civil_service 各从盒中 +3 蓝点(含
+            # breakthrough pending 子行动; 替换移除不影响已得蓝点)
+            blue_gains[state.current_player] += 1
+        state = apply(state, action, db)
         steps += 1
-        for p in state.players:
-            _assert_player_invariants(db, state, p)
+        for i, p in enumerate(state.players):
+            _assert_player_invariants(db, state, p, blue_gains[i])
         assert _accounted(state) == universe, (
             f"seed {seed} step {steps} 卡牌守恒破坏: "
             f"{_accounted(state) - universe} / {universe - _accounted(state)}"

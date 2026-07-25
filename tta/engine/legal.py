@@ -14,9 +14,9 @@ breakthrough 的 develop_tech 子行动为 0 行动点全价研发手牌科技�
 PlayActionCard。
 
 领袖钩子(Task 9): hammurabi 拿领袖牌 -1 白点; hammurabi 红点垫付白点
-(SIMPLIFICATION, 仅 TakeCard/DevelopTech/Build/Upgrade 四处挂钩, 见
-effects.flexible_actions); frugality 等行动卡的额外打出条件经
-effects.PLAY_CONDITIONS 预判。
+(官方规则: 每回合一次, 1 红点抵 1 白点, 仅 TakeCard/DevelopTech/Build/
+Upgrade 四处挂钩, 见 effects.flexible_actions); frugality 等行动卡的
+额外打出条件经 effects.PLAY_CONDITIONS 预判。
 """
 
 from tta.engine import effects
@@ -84,7 +84,7 @@ def _take_card_legal(
     if card.category is CardCategory.LEADER:
         # hammurabi: 拿领袖牌 -1 白点
         cost = max(0, cost - effects.leader_take_discount(db, p))
-    # hammurabi SIMPLIFICATION: 白点不足时可用红点 1:1 垫付
+    # hammurabi: 白点不足时每回合一次可用 1 红点抵 1 白点
     if p.civil_actions + effects.flexible_actions(db, p) < cost:
         return False
     if card.category is CardCategory.WONDER:
@@ -95,6 +95,9 @@ def _take_card_legal(
     if card.category in _NO_DUPLICATE_CATEGORIES:
         if card_id in p.hand_civil or card_id in p.developed:
             return False
+    if card.category is CardCategory.GOVERNMENT and card_id == p.government:
+        # 官方规则: 当前政体即游戏区域中的卡, 同名政府牌不可拿取
+        return False
     if card.category is CardCategory.LEADER:
         if card.age.value in p.leader_ages:
             return False
@@ -122,6 +125,9 @@ def _government_actions(db: CardDB, p: PlayerState) -> list[Action]:
     for card_id in dict.fromkeys(p.hand_civil):
         card = db.get(card_id)
         if card.category is not CardCategory.GOVERNMENT:
+            continue
+        if card_id == p.government:
+            # 官方规则: 不得变更为当前同名政体(和平演变与革命均禁)
             continue
         if p.civil_actions >= 1 and p.science >= card.cost_science:
             actions.append(DevelopGovernment(card_id, False))

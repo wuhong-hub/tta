@@ -405,7 +405,7 @@ def test_hammurabi_take_leader_discount_apply_no_red_padding(db: CardDB) -> None
 
 
 def test_hammurabi_flexible_red_as_white_take_card(db: CardDB) -> None:
-    """SIMPLIFICATION: 白点不足支付白点费用时可用红点 1:1 垫付."""
+    """白点不足支付白点费用时, 每回合一次可用 1 红点抵 1 白点."""
     row = _row(None, None, None, None, None, "stockpile")
     p = _player(leader="hammurabi", civil_actions=1, military_actions=2)
     state = _state(p, card_row=row)
@@ -427,7 +427,41 @@ def test_hammurabi_flexible_red_as_white_develop_tech(db: CardDB) -> None:
     new = apply(state, DevelopTech("religion"), db)
     p0 = new.players[0]
     assert p0.military_actions == 0
+    assert p0.turn_discounts == {effects.HAMMURABI_FLEX_KEY: 1}
     assert "religion" in p0.developed
+
+
+def test_hammurabi_flexible_limited_to_once_per_turn(db: CardDB) -> None:
+    """官方规则: 每回合一次, 可将 1 个军事行动当作内政行动使用.
+
+    本回合已垫付(turn_discounts 记录)后, 白点不足的动作不再合法。
+    """
+    p = _player(leader="hammurabi", civil_actions=0, military_actions=2,
+                hand_civil=("religion",), science=0,
+                turn_discounts={effects.HAMMURABI_FLEX_KEY: 1})
+    assert DevelopTech("religion") not in legal_actions(db, _state(p))
+
+
+def test_hammurabi_flexible_pads_at_most_one_point(db: CardDB) -> None:
+    """每次垫付最多 1 点: 2 点费仅 0 白点时, 2 红点也不可垫付."""
+    row = _row(None, None, None, None, None, "stockpile")
+    p = _player(leader="hammurabi", civil_actions=0, military_actions=3)
+    assert TakeCard(5) not in legal_actions(db, _state(p, card_row=row))
+    # 1 白点 + 1 红点垫付 2 点费仍合法
+    p = _player(leader="hammurabi", civil_actions=1, military_actions=1)
+    assert TakeCard(5) in legal_actions(db, _state(p, card_row=row))
+
+
+def test_hammurabi_flexible_resets_next_turn(db: CardDB) -> None:
+    """垫付标记存于 turn_discounts, 回合结束行动点恢复时清空."""
+    p = _player(leader="hammurabi", civil_actions=0, military_actions=1,
+                hand_civil=("religion",), science=0)
+    state = _state(p)
+    new = apply(state, DevelopTech("religion"), db)
+    assert new.players[0].turn_discounts == {effects.HAMMURABI_FLEX_KEY: 1}
+    new = apply(new, PassTurn(), db)
+    # 回合结束: turn_discounts 重置, 下一回合可再次垫付
+    assert new.players[0].turn_discounts == {}
 
 
 def test_aristotle_take_technology_gains_science(db: CardDB) -> None:

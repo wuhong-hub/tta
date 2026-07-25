@@ -311,15 +311,76 @@ def test_age_end_yellow_loss_floor_zero() -> None:
 
 
 def _age_three_refill_state(current: int) -> GameState:
+    # 时代 III 结束每人 -2 黄点 -> 食物消耗增加; 给足食物避免缺粮扣分,
+    # 使本夹具专注于时代 IV 开启与最后一轮判定
     row = ("xiii0",) + (None,) * (ROW_SLOTS - 1)
     return _state(
         round=3,
         age=Age.III,
         current_player=current,
-        players=(_player("P0", culture=5), _player("P1", culture=7)),
+        players=(
+            _player("P0", culture=5, card_tokens={"agriculture": 10}),
+            _player("P1", culture=7, card_tokens={"agriculture": 10}),
+        ),
         card_row=row,
         civil_deck=("xiii1",),
     )
+
+
+def test_age_iii_end_obsolescence_and_yellow_loss() -> None:
+    # III 堆最后一张放上牌列 -> 时代 III 结束: 与 I/II 同一序列——过期处理
+    # (更早时代手牌弃置/领袖移除/未完成奇迹蓝点退回) + 每人 -2 黄点
+    p0 = _player(
+        "P0",
+        hand_civil=("xii19", "xiii0"),
+        leader="leader_i",
+        leader_ages=("I",),
+        wonder_progress=("wonder_i", 1),
+        blue_bank=10,
+    )
+    p1 = _player("P1")
+    row = ("xiii1",) + (None,) * (ROW_SLOTS - 1)
+    state = _state(
+        round=3,
+        age=Age.III,
+        current_player=0,
+        players=(p0, p1),
+        card_row=row,
+        civil_deck=("xiii2",),
+    )
+    new = turn.advance(state, _db())
+    assert new.age is Age.IV
+    # 过期手牌(时代 II 及更早)入弃牌堆, 时代 III 手牌保留
+    q = new.players[0]
+    assert q.hand_civil == ("xiii0",)
+    assert new.discard == ("xii19",)
+    # 过期领袖入 removed 并清 None, leader_ages 保留
+    assert q.leader is None
+    assert q.leader_ages == ("I",)
+    # 过期未完成奇迹: 已付 1 阶段蓝点退回 blue_bank, 奇迹入 removed
+    assert q.wonder_progress is None
+    assert q.blue_bank == 11
+    # removed: 弃牌列 3 张(xiii1 与空位) + 过期领袖 + 过期奇迹
+    assert new.removed == ("xiii1", "leader_i", "wonder_i")
+    # 每人 -2 黄点
+    assert [p.yellow_bank for p in new.players] == [16, 16]
+
+
+def test_age_iii_end_yellow_loss_floor_zero() -> None:
+    p0 = _player("P0", yellow_bank=1)
+    p1 = _player("P1", yellow_bank=18)
+    row = ("xiii1",) + (None,) * (ROW_SLOTS - 1)
+    state = _state(
+        round=3,
+        age=Age.III,
+        current_player=0,
+        players=(p0, p1),
+        card_row=row,
+        civil_deck=("xiii2",),
+    )
+    new = turn.advance(state, _db())
+    assert new.age is Age.IV
+    assert [p.yellow_bank for p in new.players] == [0, 16]
 
 
 def test_age_iv_opened_at_start_player_turn_makes_this_round_last() -> None:

@@ -25,7 +25,7 @@ from tta.engine.actions import (
     Upgrade,
 )
 from tta.engine.economy import pay
-from tta.engine.enums import UNIT_CATEGORIES, CardCategory
+from tta.engine.enums import UNIT_CATEGORIES, Age, CardCategory
 from tta.engine.legal import ROW_COSTS, legal_actions, turn_discount_for
 from tta.engine.model import CardDB
 from tta.engine.state import GameState, PlayerState, replace_player
@@ -85,12 +85,14 @@ def _spend_point(p: PlayerState, military: bool) -> PlayerState:
 
 
 def _spend_civil(db: CardDB, p: PlayerState, cost: int) -> PlayerState:
-    """扣 cost 白点; 白点不足时经 effects.flexible_actions 用红点 1:1 垫付.
+    """扣 cost 白点; 白点不足时经 effects.flexible_actions 用 1 红点垫付.
 
-    hammurabi SIMPLIFICATION: 仅 TakeCard / DevelopTech / Build / Upgrade
-    四处挂钩(与 legal 一致), 其余白点花费(PlayLeader / Destroy /
-    BuildWonderStage 等)不垫付。垫付上限由 legal 保证; 防御性校验:
-    无垫付资格(非 hammurabi)或红点不足以覆盖差额时抛 IllegalActionError。
+    hammurabi 官方规则: 每回合一次, 可将 1 个军事行动当作内政行动使用
+    (每次垫付最多 1 点, 已用标记写入 turn_discounts, 回合末清空)。
+    仅 TakeCard / DevelopTech / Build / Upgrade 四处挂钩(与 legal 一致),
+    其余白点花费(PlayLeader / Destroy / BuildWonderStage 等)不垫付。
+    垫付上限由 legal 保证; 防御性校验: 无垫付资格(非 hammurabi / 本回合
+    已用 / 红点不足)或差额超过 1 点时抛 IllegalActionError。
     """
     deficit = cost - p.civil_actions
     if deficit <= 0:
@@ -98,8 +100,11 @@ def _spend_civil(db: CardDB, p: PlayerState, cost: int) -> PlayerState:
     if effects.flexible_actions(db, p) < deficit:
         msg = f"白点不足且无红点垫付资格(hammurabi): 需垫付 {deficit}"
         raise IllegalActionError(msg)
+    discounts = dict(p.turn_discounts)
+    discounts[effects.HAMMURABI_FLEX_KEY] = 1
     return replace(
-        p, civil_actions=0, military_actions=p.military_actions - deficit)
+        p, civil_actions=0, military_actions=p.military_actions - deficit,
+        turn_discounts=discounts)
 
 
 def _remove_from_hand(p: PlayerState, card_id: str) -> PlayerState:
@@ -152,6 +157,40 @@ def _take_card(db: CardDB, state: GameState, action: TakeCard) -> GameState:
     return _update(state, p)
 
 
+_SPECIAL_AGE_ORDER = (Age.A, Age.I, Age.II, Age.III)
+"""特殊科技等级比较的时代序(同级再按 cost_science)."""
+
+
+def _replace_lower_special(
+    db: CardDB, state: GameState, p: PlayerState, new_card_id: str,
+) -> tuple[GameState, PlayerState]:
+    """同类型特殊科技替换: 两张并存时立即将等级较低者从游戏中移除.
+
+    官方规则: LAW/WARFARE/EXPLORATION/CONSTRUCTION 四类特殊科技,
+    同时拥有两张同类型时, 等级较低者(先比时代序, 同级按 cost_science)
+    从游戏中移除(入 removed, 保持卡牌守恒); 其静态加成随之失效。
+    """
+    new_type = db.get(new_card_id).special_type
+    same = [
+        card_id for card_id in p.developed
+        if db.get(card_id).category is CardCategory.SPECIAL
+        and db.get(card_id).special_type is new_type
+    ]
+    if len(same) < 2:
+        return state, p
+
+    def _level(card_id: str) -> tuple[int, int]:
+        card = db.get(card_id)
+        return (_SPECIAL_AGE_ORDER.index(card.age), card.cost_science)
+
+    lower = min(same, key=_level)
+    developed = list(p.developed)
+    developed.remove(lower)
+    p = replace(p, developed=tuple(developed))
+    state = replace(state, removed=state.removed + (lower,))
+    return state, p
+
+
 def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameState:
     p = state.players[state.current_player]
     card = db.get(action.card_id)
@@ -168,6 +207,9 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
             p = _spend_civil(db, p, 1)
     p = replace(p, science=p.science - card.cost_science + science_gain,
                 developed=p.developed + (action.card_id,))
+    if card.category is CardCategory.SPECIAL:
+        # 官方规则: 同类型特殊科技两张并存 -> 等级较低者立即从游戏中移除
+        state, p = _replace_lower_special(db, state, p, action.card_id)
     # 研发即时收益(leonardo +1 资源 / newton 拿回白点 / justice_system +3 蓝点)
     p = effects.on_develop_tech_gains(db, p, action.card_id)
     return _update(state, p)
@@ -273,11 +315,14 @@ def _play_leader(db: CardDB, state: GameState, action: PlayLeader) -> GameState:
     p = state.players[state.current_player]
     card = db.get(action.card_id)
     p = _remove_from_hand(p, action.card_id)
+    # 官方规则: 打出领袖付 1 白点; 仅替换已有领袖时拿回 1 白点(净耗 0),
+    # 首次打出净耗 1
+    p = replace(p, civil_actions=p.civil_actions - 1)
     if p.leader is not None:
         state = replace(state, discard=state.discard + (p.leader,))
+        p = replace(p, civil_actions=p.civil_actions + 1)
     p = replace(p, leader=action.card_id,
                 leader_ages=p.leader_ages + (card.age.value,))
-    # 1 白点花出并拿回, 净耗 0 -> civil_actions 不变
     return _update(state, p)
 
 

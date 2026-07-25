@@ -25,7 +25,7 @@ Age A 领袖钩子(Task 9):
   increase_population, 调用点为 IncreasePopulation 动作(apply)与
   frugality handler);
 - hammurabi: leader_take_discount 使拿领袖牌 -1 白点; flexible_actions
-  实现"红点当白点"(SIMPLIFICATION 见函数 docstring);
+  实现"每回合一次, 1 红点当 1 白点"(官方规则, 见函数 docstring);
 - aristotle: on_take_card_gains 在 apply TakeCard 结算时 +1 科技。
 
 时代 I 钩子(Task 10):
@@ -142,6 +142,9 @@ PLAY_CONDITIONS: dict[str, Callable[[CardDB, PlayerState], bool]] = {}
 
 UNIT_BUILD_DISCOUNT_KEY = "unit_build"
 """turn_discounts 中兵种建造折扣的键(回合修饰类行动卡/领袖钩子写入)."""
+
+HAMMURABI_FLEX_KEY = "hammurabi_flex"
+"""turn_discounts 中 hammurabi 本回合红点垫付已用标记的键(回合末清空)."""
 
 # Age A 领袖卡 id(engine 不 import tta.cards, 以字符串常量引用)
 LEADER_ALEXANDER = "alexander_the_great"
@@ -307,14 +310,19 @@ def leader_take_discount(db: CardDB, p: PlayerState) -> int:
 
 
 def flexible_actions(db: CardDB, p: PlayerState) -> int:
-    """可用于垫付白点费用的红点数(hammurabi: 全部红点; 否则 0).
+    """可用于垫付白点费用的红点数(hammurabi: 0 或 1; 否则 0).
 
-    SIMPLIFICATION: hammurabi 官方能力为"每回合一次, 把 1 个军事行动当作
-    内政行动使用"; P1 实现为"白点不足支付白点费用时, 可用红点 1:1 垫付",
+    官方规则: hammurabi 每回合一次, 可将 1 个军事行动当作内政行动使用。
+    实现为: 白点不足支付白点费用时, 可用 1 红点抵 1 白点(每次垫付最多
+    1 点, 且本回合限一次, 已用标记存于 turn_discounts 并在回合末清空),
     仅 legal/apply 的 TakeCard / DevelopTech / Build / Upgrade 四处挂钩,
     其余白点花费(PlayLeader / Destroy / BuildWonderStage 等)不垫付。
     """
-    return p.military_actions if p.leader == LEADER_HAMMURABI else 0
+    if p.leader != LEADER_HAMMURABI:
+        return 0
+    if p.turn_discounts.get(HAMMURABI_FLEX_KEY, 0):
+        return 0
+    return 1 if p.military_actions >= 1 else 0
 
 
 _TECH_TAKE_CATEGORIES = (
@@ -617,10 +625,11 @@ def _internet_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
 def _first_space_flight_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
     """first_space_flight(奇迹): 每项已研发科技每级 +1 文化.
 
-    SIMPLIFICATION: 仅计 developed 中的科技(工人科技 + 特殊科技),
-    政体卡不计(级 = 时代序, 同 _TECH_LEVEL 口径)。
+    官方规则: 政体算科技, 当前政体按其时代等级计入(级 = 时代序,
+    同 _TECH_LEVEL 口径)。
     """
     culture = sum(_TECH_LEVEL[db.get(card_id).age] for card_id in p.developed)
+    culture += _TECH_LEVEL[db.get(p.government).age]
     return {"culture": culture} if culture else {}
 
 

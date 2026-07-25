@@ -367,14 +367,24 @@ def test_internet_static_bonus(db: CardDB) -> None:
 
 
 def test_first_space_flight_static_bonus(db: CardDB) -> None:
-    """first_space_flight: 每项已研发科技每级 +1 文化(政体不计)."""
-    # computers(III=4 级) + irrigation(I=2 级) + warfare(I=2 级) = 8
+    """first_space_flight: 每项已研发科技每级 +1 文化(政体算科技)."""
+    # computers(III=4 级) + irrigation(I=2 级) + warfare(I=2 级)
+    # + 当前政体 despotism(A=1 级) = 9
     p = _player(
         wonders=("first_space_flight",),
         developed=("computers", "irrigation", "warfare"),
     )
     civ = civ_values(db, p)
-    assert civ.culture_rate == 8
+    assert civ.culture_rate == 9
+    # 政体等级按时代计: democracy(III=4 级)替换 despotism -> 12,
+    # 另加 democracy 自身 +3 文化静态加成
+    p = _player(
+        wonders=("first_space_flight",),
+        developed=("computers", "irrigation", "warfare"),
+        government="democracy",
+    )
+    civ = civ_values(db, p)
+    assert civ.culture_rate == 12 + 3
 
 
 def test_fast_food_chains_static_bonus(db: CardDB) -> None:

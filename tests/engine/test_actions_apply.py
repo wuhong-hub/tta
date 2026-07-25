@@ -21,7 +21,7 @@ from tta.engine.actions import (
     Upgrade,
 )
 from tta.engine.apply import _spend_civil, apply
-from tta.engine.enums import Age, CardCategory, DeckType
+from tta.engine.enums import Age, CardCategory, DeckType, SpecialType
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
 from tta.engine.state import ROW_SLOTS, GameState, PlayerState, replace_player
 
@@ -64,6 +64,12 @@ def _db() -> CardDB:
                           build_cost=2, strength=1),
         "leader_a": _card("leader_a", CardCategory.LEADER),
         "leader_b": _card("leader_b", CardCategory.LEADER, age=Age.I),
+        "law_low": _card("law_low", CardCategory.SPECIAL, age=Age.I,
+                         cost_science=2, special_type=SpecialType.LAW),
+        "law_high": _card("law_high", CardCategory.SPECIAL, age=Age.II,
+                          cost_science=4, special_type=SpecialType.LAW),
+        "war_low": _card("war_low", CardCategory.SPECIAL, age=Age.I,
+                         cost_science=2, special_type=SpecialType.WARFARE),
         "pyramids": _card("pyramids", CardCategory.WONDER,
                           wonder_stages=(3, 2)),
         "great_library": _card("great_library", CardCategory.WONDER,
@@ -161,6 +167,26 @@ def test_develop_tech_apply() -> None:
     assert new.players[0].military_actions == 2
 
 
+def test_develop_special_same_type_removes_lower() -> None:
+    """官方规则: 拥有两张同类型特殊科技时, 立即将等级较低者从游戏中移除."""
+    db = _db()
+    # 已有低级 LAW, 研发高级 LAW -> 低级入 removed(卡牌守恒)
+    p = _player(science=4, hand_civil=("law_high",), developed=("law_low",))
+    new = apply(_state(p), DevelopTech("law_high"), db)
+    assert new.players[0].developed == ("law_high",)
+    assert new.removed == ("law_low",)
+    # 反向: 已有高级, 研发低级 -> 新研发的低级立即入 removed
+    p = _player(science=2, hand_civil=("law_low",), developed=("law_high",))
+    new = apply(_state(p), DevelopTech("law_low"), db)
+    assert new.players[0].developed == ("law_high",)
+    assert new.removed == ("law_low",)
+    # 不同类型特殊科技不触发替换
+    p = _player(science=2, hand_civil=("war_low",), developed=("law_low",))
+    new = apply(_state(p), DevelopTech("war_low"), db)
+    assert new.players[0].developed == ("law_low", "war_low")
+    assert new.removed == ()
+
+
 def test_develop_unit_uses_red_point() -> None:
     db = _db()
     p = _player(science=2, hand_civil=("warriors",))
@@ -244,9 +270,27 @@ def test_play_leader_apply() -> None:
     assert new.players[0].leader == "leader_a"
     assert new.players[0].leader_ages == ("I", "A")
     assert new.players[0].hand_civil == ()
-    # 1 白点花出并拿回, 净耗 0
+    # 替换已有领袖: 1 白点花出并拿回, 净耗 0
     assert new.players[0].civil_actions == 4
     assert new.discard == ("leader_b",)
+
+
+def test_play_leader_first_time_costs_one_white() -> None:
+    """官方规则: 打出领袖付 1 白点; 首次打出(无旧领袖)不返还, 净耗 1."""
+    db = _db()
+    p = _player(hand_civil=("leader_a",))
+    new = apply(_state(p), PlayLeader("leader_a"), db)
+    assert new.players[0].leader == "leader_a"
+    assert new.players[0].leader_ages == ("A",)
+    assert new.players[0].hand_civil == ()
+    assert new.players[0].civil_actions == 3
+    assert new.discard == ()
+    # 再次打出(替换): 净耗 0
+    p2 = _player(hand_civil=("leader_b",), leader="leader_a",
+                 leader_ages=("A",))
+    new2 = apply(_state(p2), PlayLeader("leader_b"), db)
+    assert new2.players[0].civil_actions == 4
+    assert new2.discard == ("leader_a",)
 
 
 def test_build_wonder_stage_apply() -> None:
@@ -324,11 +368,26 @@ def test_spend_civil_red_padding_requires_hammurabi() -> None:
     p = _player(civil_actions=1, military_actions=2)
     with pytest.raises(IllegalActionError):
         _spend_civil(db, p, 2)
-    # hammurabi: 红点 1:1 垫付
+    # hammurabi: 1 红点抵 1 白点, 垫付后记录本回合已用
     p = _player(civil_actions=1, military_actions=2, leader="hammurabi")
     new = _spend_civil(db, p, 2)
     assert new.civil_actions == 0
     assert new.military_actions == 1
+    assert new.turn_discounts == {effects.HAMMURABI_FLEX_KEY: 1}
+
+
+def test_spend_civil_red_padding_once_per_turn_and_max_one() -> None:
+    """官方规则: hammurabi 每回合一次, 且每次垫付最多 1 点."""
+    db = _db()
+    # 本回合已垫付过: 再次垫付防御性抛错
+    p = _player(civil_actions=0, military_actions=2, leader="hammurabi",
+                turn_discounts={effects.HAMMURABI_FLEX_KEY: 1})
+    with pytest.raises(IllegalActionError):
+        _spend_civil(db, p, 1)
+    # 差额超过 1 点: 即使红点充足也不可垫付
+    p = _player(civil_actions=0, military_actions=3, leader="hammurabi")
+    with pytest.raises(IllegalActionError):
+        _spend_civil(db, p, 2)
 
 
 def test_apply_does_not_mutate_input() -> None:

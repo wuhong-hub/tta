@@ -223,6 +223,33 @@ def test_take_card_tech_duplicate_blocked() -> None:
     assert TakeCard(0) in legal_actions(db, state)
 
 
+def test_take_card_government_current_blocked() -> None:
+    """官方规则: 当前政体即游戏区域中的卡, 不可再拿同名政府牌."""
+    db = _db()
+    # 当前政体为 republic: 牌列上的 republic 不可拿
+    p = _player(government="republic")
+    state = _state(p, card_row=_row("republic", "bronze"))
+    takes = [a for a in legal_actions(db, state) if isinstance(a, TakeCard)]
+    assert takes == [TakeCard(1)]
+    # 初始政体 despotism 同理(游戏区域内的政府牌)
+    p = _player()
+    state = _state(p, card_row=_row("despotism"))
+    assert TakeCard(0) not in legal_actions(db, state)
+
+
+def test_develop_government_same_as_current_blocked() -> None:
+    """官方规则: 不得变更为当前同名政体(和平与革命均禁)."""
+    db = _db()
+    p = _player(government="republic", science=20, hand_civil=("republic",))
+    actions = legal_actions(db, _state(p))
+    assert not [a for a in actions if isinstance(a, DevelopGovernment)]
+    # 不同名政体不受影响
+    p = _player(science=4, hand_civil=("republic",))
+    actions = legal_actions(db, _state(p))
+    assert DevelopGovernment("republic", False) in actions
+    assert DevelopGovernment("republic", True) in actions
+
+
 def test_take_card_leader_age_duplicate_blocked() -> None:
     db = _db()
     state = _state(_player(leader_ages=("A",)),
