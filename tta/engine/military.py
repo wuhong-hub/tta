@@ -93,6 +93,23 @@ def army_strength(db: CardDB, p: PlayerState) -> int:
     return base + bonus
 
 
+def units_strength(
+    db: CardDB, p: PlayerState, unit_card_ids: tuple[str, ...],
+) -> int:
+    """所选军事单位(卡 id 可重复, 每个条目 = 1 个单位)按 p 当前阵型组军的军力.
+
+    用于殖民牺牲结算(规则书 p7): 被挑出的军事单位可根据玩家当前的阵型
+    组成军队, 组军方式与军力等级计算无关(独立贪心组军)。实现: 构造仅含
+    所选单位的伪 PlayerState 复用 army_strength。
+    """
+    buildings: dict[str, dict[str, int]] = {}
+    for card_id in unit_card_ids:
+        category = db.get(card_id).category.value
+        slots = buildings.setdefault(category, {})
+        slots[card_id] = slots.get(card_id, 0) + 1
+    return army_strength(db, replace(p, buildings=buildings))
+
+
 def draw_military(state: GameState, idx: int, count: int) -> GameState:
     """从军事牌堆抓 count 张入 idx 手(牌堆空切洗军事弃牌堆; 时代 IV 不抓).
 

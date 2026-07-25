@@ -8,7 +8,9 @@
 3. 军力 = military.army_strength(单位基础 + 阵型加成, 见 military.py)
    + 静态加成(政体/奇迹/领袖/特殊科技的 "strength" 键);
 4. 已完成奇迹 wonders 的 wonder_bonus 同 bonus 语义累加;
-5. effects.static_bonuses 叠加领袖/特殊科技静态加成(亚历山大每单位 +1、
+5. 殖民地 territory_permanent 同语义累加(yellow_token/blue_token 为
+   获得时一次性银行调整, 除外);
+6. effects.static_bonuses 叠加领袖/特殊科技静态加成(亚历山大每单位 +1、
    拿破仑每类型 +2 等经 "strength" 键叠加于 army_strength 之上)。
 
 收益键映射: "science" -> science_rate, "culture" -> culture_rate,
@@ -30,6 +32,9 @@ from tta.engine.tracks import happiness_required
 
 MAX_HAPPINESS = 8
 """笑脸总数上限(官方规则 0-8)."""
+
+_COLONY_TOKEN_KEYS = ("yellow_token", "blue_token")
+"""殖民地永久效果中的一次性银行标记键(不参与 civ 合成)."""
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,15 @@ def civ_values(db: CardDB, p: PlayerState) -> CivValues:
 
     for card_id in p.wonders:
         _add_all(bonus, db.get(card_id).wonder_bonus)
+
+    # 殖民地永久效果(yellow_token/blue_token 为获得时一次性银行调整,
+    # 不入合成, 见 politics._grant_colony); 可含负值(如 vast_territory)
+    for card_id in p.colonies:
+        permanent = db.get(card_id).territory_permanent
+        _add_all(bonus, {
+            key: value for key, value in permanent.items()
+            if key not in _COLONY_TOKEN_KEYS
+        })
 
     _add_all(bonus, effects.static_bonuses(db, p))
 

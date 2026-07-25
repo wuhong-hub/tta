@@ -153,6 +153,44 @@ class ChooseEventOption:
 
 
 @dataclass(frozen=True)
+class ColonizeBid:
+    """殖民竞拍出价: 须高于当前最高出价, 且不超过可承诺殖民军力上限
+    (见 politics.colonization_cap; 规则书 p7 殖民节)。"""
+
+    amount: int
+
+
+@dataclass(frozen=True)
+class ColonizePass:
+    """退出殖民竞拍(bidders 移除); 全员退出则地区牌入 past_events."""
+
+
+@dataclass(frozen=True)
+class ColonizePlayBonus:
+    """胜者牺牲结算中打出手中军事奖励牌: 殖民数值累加进已出奖励,
+    卡入军事弃牌堆(可打出多张, 见 politics.colonize_play_bonus)。"""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class ColonizeSacrifice:
+    """胜者提交牺牲的军事单位元组(卡 id 可重复表多张, 各牺牲 1 工人).
+
+    组合枚举爆炸, legal 仅提供"全选"锚点动作; apply 独立校验(非法抛
+    IllegalActionError): 所选单位军力(按当前阵型组军, 见
+    military.units_strength) + 殖民修正 + 已出奖励 >= 出价, 且至少 1 个
+    单位(规则书 p7)。成功后工人回黄点银行并获得殖民地。
+    """
+
+    units: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        # 反序列化产物(list)归一为 tuple, 保证可哈希与相等性
+        object.__setattr__(self, "units", tuple(self.units))
+
+
+@dataclass(frozen=True)
 class DiscardMilitary:
     """弃 1 张军事手牌入军事弃牌堆(响应回合末 discard_military pending)."""
 
@@ -185,6 +223,7 @@ Action = (
     | PlayTactics | CopyTactics | PassTurn
     | DeclineResponse | SeedEvent | PlayAggression | DeclareWar
     | ProposePact | CancelPact | Resign | ChooseEventOption
+    | ColonizeBid | ColonizePass | ColonizePlayBonus | ColonizeSacrifice
 )
 
 _ACTION_TYPES: dict[str, type] = {
@@ -212,6 +251,10 @@ _ACTION_TYPES: dict[str, type] = {
     "cancel_pact": CancelPact,
     "resign": Resign,
     "choose_event_option": ChooseEventOption,
+    "colonize_bid": ColonizeBid,
+    "colonize_pass": ColonizePass,
+    "colonize_play_bonus": ColonizePlayBonus,
+    "colonize_sacrifice": ColonizeSacrifice,
 }
 _TYPE_NAMES: dict[type, str] = {v: k for k, v in _ACTION_TYPES.items()}
 

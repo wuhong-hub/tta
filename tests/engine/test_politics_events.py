@@ -4,8 +4,9 @@
 限 1 政治行动)、SeedEvent 结算(军事手牌 -> future_events 顶 -> 揭示
 current_events 顶 -> handler 结算 -> past_events -> 当前堆尽重洗
 future_events)、未注册事件 fail-loud(Age A)/过场(后续时代, TODO
-T6/T11/T12)、TERRITORY 占位(T7)、DeclineResponse 白名单兜底、Age A 全
-10 事件 handler、事件 pending 链多玩家轮转。
+T6/T11/T12)、TERRITORY 触发殖民竞拍(T7, 详见 test_colonization.py)、
+DeclineResponse 白名单兜底、Age A 全 10 事件 handler、事件 pending 链多
+玩家轮转。
 """
 
 from dataclasses import replace
@@ -233,8 +234,9 @@ def test_seed_event_last_reveal_reshuffles_future_by_age() -> None:
     assert new.past_events == ("development_of_crafts",)
 
 
-def test_seed_event_territory_placeholder_goes_to_past() -> None:
-    # T7 殖民竞拍占位: TERRITORY 揭示后直接入 past_events
+def test_seed_event_territory_starts_colonize_bid() -> None:
+    # TERRITORY 揭示 -> 触发殖民竞拍(P2-T7, 详见 test_colonization.py):
+    # 地区牌暂不入 past_events, 压入 colonize_bid pending
     db = build_card_db()
     p0 = _player("P0", hand_military=("development_of_crafts",))
     state = _state(
@@ -242,8 +244,11 @@ def test_seed_event_territory_placeholder_goes_to_past() -> None:
         current_events=("developed_territory_i", "development_of_science"),
     )
     new = apply(state, SeedEvent("development_of_crafts"), db)
-    assert new.past_events == ("developed_territory_i",)
+    assert new.past_events == ()
     assert new.current_events == ("development_of_science",)
+    assert len(new.pending) == 1
+    assert new.pending[0].kind == "colonize_bid"
+    assert new.pending[0].context["territory"] == "developed_territory_i"
 
 
 def test_seed_event_unregistered_age_a_event_fails_loud() -> None:

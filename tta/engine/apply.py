@@ -20,6 +20,10 @@ from tta.engine.actions import (
     Build,
     BuildWonderStage,
     ChooseEventOption,
+    ColonizeBid,
+    ColonizePass,
+    ColonizePlayBonus,
+    ColonizeSacrifice,
     CopyTactics,
     DeclineResponse,
     Destroy,
@@ -50,6 +54,11 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     if state.terminal:
         msg = "游戏已结束, 无合法动作"
         raise IllegalActionError(msg)
+    if isinstance(action, ColonizeSacrifice):
+        # 牺牲元组组合枚举爆炸: legal 仅提供"全选"锚点, 此处独立于成员
+        # 判定校验(非法抛 IllegalActionError, 见 politics.colonize_sacrifice),
+        # 供 LLM 玩家构造精确子集元组
+        return politics.colonize_sacrifice(db, state, action)
     if action not in legal_actions(db, state):
         msg = f"非法动作: {action!r}"
         raise IllegalActionError(msg)
@@ -68,6 +77,12 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return politics.seed_event(db, state, action)
     if isinstance(action, ChooseEventOption):
         return events.apply_event_choice(db, state, action.option)
+    if isinstance(action, ColonizeBid):
+        return politics.colonize_bid(db, state, action)
+    if isinstance(action, ColonizePass):
+        return politics.colonize_pass(db, state, action)
+    if isinstance(action, ColonizePlayBonus):
+        return politics.colonize_play_bonus(db, state, action)
     if isinstance(action, TakeCard):
         return _take_card(db, state, action)
     if isinstance(action, DevelopTech):

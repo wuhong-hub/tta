@@ -32,12 +32,16 @@ Upgrade 四处挂钩, 见 effects.flexible_actions); frugality 等行动卡的
 额外打出条件经 effects.PLAY_CONDITIONS 预判。
 """
 
-from tta.engine import effects, events, politics
+from tta.engine import effects, events, military, politics
 from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
     ChooseEventOption,
+    ColonizeBid,
+    ColonizePass,
+    ColonizePlayBonus,
+    ColonizeSacrifice,
     CopyTactics,
     DeclineResponse,
     Destroy,
@@ -365,7 +369,63 @@ def _pending_actions(
         return _free_build_actions(p, events.EVENT_FREE_BUILD[pending.kind])
     if pending.kind == events.KIND_EVENT_CIVILIZATION:
         return _civilization_choice_actions(db, p)
+    if pending.kind == politics.KIND_COLONIZE_BID:
+        return _colonize_bid_actions(db, p, pending)
+    if pending.kind == politics.KIND_COLONIZE_SACRIFICE:
+        return _colonize_sacrifice_actions(db, p, pending)
     return []
+
+
+def _colonize_bid_actions(
+    db: CardDB, p: PlayerState, pending: PendingEffect,
+) -> list[Action]:
+    """殖民竞拍: ColonizeBid(高于当前出价且 <= 可承诺上限) + ColonizePass.
+
+    无军事单位者不可出价(规则书 p7: 必须挑出至少 1 个军事单位, 不能只靠
+    奖励牌与殖民修正); ColonizePass 恒可用(退出竞拍)。
+    """
+    actions: list[Action] = []
+    if politics.has_military_unit(p):
+        current_bid = int(pending.context.get("current_bid", 0))
+        cap = politics.colonization_cap(db, p)
+        actions.extend(
+            ColonizeBid(amount) for amount in range(current_bid + 1, cap + 1))
+    actions.append(ColonizePass())
+    return actions
+
+
+def _colonize_sacrifice_actions(
+    db: CardDB, p: PlayerState, pending: PendingEffect,
+) -> list[Action]:
+    """胜者牺牲结算: 逐张 ColonizePlayBonus + "全选"锚点 ColonizeSacrifice.
+
+    牺牲元组组合枚举爆炸, legal 仅提供"牺牲全部单位"锚点(出价 <= 上限
+    保证其恒可履约, 配合奖励牌); 精确子集由 apply 独立校验(见
+    politics.colonize_sacrifice), LLM 玩家可构造任意元组动作。
+    """
+    actions: list[Action] = [
+        ColonizePlayBonus(card_id)
+        for card_id in dict.fromkeys(p.hand_military)
+        if db.get(card_id).category is CardCategory.BONUS
+        and db.get(card_id).colonize_bonus > 0
+    ]
+    all_units = tuple(
+        card_id
+        for category in sorted(UNIT_CATEGORIES, key=lambda c: c.value)
+        for card_id, workers in sorted(p.buildings.get(category.value, {}).items())
+        for _ in range(workers)
+    )
+    if all_units:
+        bid = int(pending.context["bid"])
+        bonus = int(pending.context.get("bonus", 0))
+        strength = (
+            military.units_strength(db, p, all_units)
+            + civ_values(db, p).colonization
+            + bonus
+        )
+        if strength >= bid:
+            actions.append(ColonizeSacrifice(all_units))
+    return actions
 
 
 def _free_build_actions(p: PlayerState, card_id: str) -> list[Action]:

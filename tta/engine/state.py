@@ -181,7 +181,6 @@ def _player_to_dict(p: PlayerState) -> dict:
         # rebellion 下回合白点扣减; 非 0 才落盘(旧格式逐字节兼容)
         data["civil_action_debt"] = p.civil_action_debt
     return data
-    return data
 
 
 def _player_from_dict(d: dict) -> PlayerState:
