@@ -64,6 +64,7 @@ class PlayerState:
     tactics: str | None = None               # 当前专属阵型
     tactics_public: bool = False             # 已公开(可被复制)
     tactics_this_turn: bool = False          # 本回合已打出/复制阵型(限 1)
+    tactics_copied: bool = False             # 当前阵型为复制引用(无实体卡, 替换时不入弃牌堆)
     colonies: tuple[str, ...] = ()
     declared_wars: tuple[str, ...] = ()      # 已宣告待结算的战争牌
     pacts: tuple[str, ...] = ()              # 生效中的条约(卡 id, 3-4 人)
@@ -168,6 +169,7 @@ def _player_to_dict(p: PlayerState) -> dict:
         "tactics": p.tactics,
         "tactics_public": p.tactics_public,
         "tactics_this_turn": p.tactics_this_turn,
+        "tactics_copied": p.tactics_copied,
         "colonies": list(p.colonies),
         "declared_wars": list(p.declared_wars),
         "pacts": list(p.pacts),
@@ -201,6 +203,7 @@ def _player_from_dict(d: dict) -> PlayerState:
         tactics=d.get("tactics"),
         tactics_public=d.get("tactics_public", False),
         tactics_this_turn=d.get("tactics_this_turn", False),
+        tactics_copied=d.get("tactics_copied", False),
         colonies=tuple(d.get("colonies", ())),
         declared_wars=tuple(d.get("declared_wars", ())),
         pacts=tuple(d.get("pacts", ())),

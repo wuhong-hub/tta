@@ -9,7 +9,8 @@ advance(state, db) 流程:
    腐败[资源支付, 不足用食物补, 仍不足损失到此为止] -> 食物生产 ->
    食物消耗[每缺 1 -4 文化, 文化下限 0] -> 资源生产) -> 抓军事牌
    (min(剩余红点, 3) 张; 牌堆空则切洗军事弃牌堆重置牌堆, 弃牌堆也空则
-   抓不到; 时代 IV 不抓) -> 恢复行动点(= civ 总值) -> 重置 turn_discounts
+   抓不到; 时代 IV 不抓) -> 恢复行动点(= civ 总值, 同时清零
+   tactics_this_turn) -> 重置 turn_discounts
    (注入领袖回合修饰, 如 homer 军事建造折扣, 见 effects.turn_start_discounts)。
    官方顺序: 回合结束阶段(含弃牌决策)全部完成后, 才轮到下一位的回合
    开始。压入 discard_military pending 时 advance 即停(phase 置
@@ -25,7 +26,9 @@ advance(state, db) 流程:
    round += 1, 且 age 已为 IV 时 last_round = True(非起始玩家回合开启
    IV -> 下一轮为最后一轮)。
 3. 回合开始(nxt 玩家): round == 1 -> 全部跳过; 否则弃最左
-   N(2/3/4 人 -> 3/2/1)个位置的牌入 removed -> 左移紧凑 -> 补牌:
+   N(2/3/4 人 -> 3/2/1)个位置的牌入 removed -> 左移紧凑 -> 补牌
+   -> 强制公开专属阵型(规则书 p3: tactics 非 None 且未公开 ->
+   tactics_public=True):
    - 时代 A 于第一次补牌时结束: 先用 A 堆补空位, 余牌入 removed, 启用
      I 堆继续补(官方规则: 时代 A 结束 nothing else happens -> 无过期,
      也无每人 -2 黄点);
@@ -114,6 +117,7 @@ def proceed(state: GameState, db: CardDB) -> GameState:
             state = replace(state, last_round=True)
     state = replace(state, current_player=nxt, phase=Phase.TURN_START)
     state = _start_of_turn(state, db)
+    state = _reveal_tactics(state)
     # 第一回合跳过政治阶段(回合开始阶段 _start_of_turn 对 round==1 本就跳过)
     phase = Phase.ACTION if state.round == 1 else Phase.POLITICS
     return replace(state, phase=phase)
@@ -143,12 +147,14 @@ def end_of_turn(state: GameState, db: CardDB) -> GameState:
         p = _production(db, p, values)
     # d. 抓军事牌: min(剩余红点, 3); 时代 IV 不抓
     state, p = _draw_military(state, p)
-    # e. 恢复行动点 = civ 总值; 重置 turn_discounts(注入领袖回合修饰)
+    # e. 恢复行动点 = civ 总值; 重置 turn_discounts(注入领袖回合修饰);
+    # 清零 tactics_this_turn(阵型打出/复制每回合限 1, 随行动点恢复重置)
     p = replace(
         p,
         civil_actions=values.civil_actions,
         military_actions=values.military_actions,
         turn_discounts=effects.turn_start_discounts(db, p),
+        tactics_this_turn=False,
     )
     return replace_player(state, idx, p)
 
@@ -208,6 +214,18 @@ def _production(db: CardDB, p: PlayerState, values: civ.CivValues) -> PlayerStat
 
 
 # --- 回合开始阶段 -----------------------------------------------------------
+
+
+def _reveal_tactics(state: GameState) -> GameState:
+    """回合开始强制公开专属阵型(规则书 p3: 有阵型牌必须在此时将其公开).
+
+    公开后其他玩家方可复制(CopyTactics); 打出/复制的当回合不公开。
+    """
+    idx = state.current_player
+    p = state.players[idx]
+    if p.tactics is None or p.tactics_public:
+        return state
+    return replace_player(state, idx, replace(p, tactics_public=True))
 
 
 def _start_of_turn(state: GameState, db: CardDB) -> GameState:

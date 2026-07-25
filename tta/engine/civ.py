@@ -5,9 +5,11 @@
    + bonus dict) 为基础;
 2. 城市建筑(LAB / TEMPLE / LIBRARY / THEATER / ARENA)按工人数 ×
    urban_produces 累加 science / culture / happiness;
-3. 军事单位(UNIT 类别)按工人数 × strength 累加;
+3. 军力 = military.army_strength(单位基础 + 阵型加成, 见 military.py)
+   + 静态加成(政体/奇迹/领袖/特殊科技的 "strength" 键);
 4. 已完成奇迹 wonders 的 wonder_bonus 同 bonus 语义累加;
-5. effects.static_bonuses 叠加领袖/特殊科技静态加成。
+5. effects.static_bonuses 叠加领袖/特殊科技静态加成(亚历山大每单位 +1、
+   拿破仑每类型 +2 等经 "strength" 键叠加于 army_strength 之上)。
 
 收益键映射: "science" -> science_rate, "culture" -> culture_rate,
 "strength" -> strength, "happiness" -> happiness, "civil_actions" /
@@ -20,8 +22,8 @@ strength 下限 0(负增速视作 0)。
 
 from dataclasses import dataclass
 
-from tta.engine import effects
-from tta.engine.enums import UNIT_CATEGORIES, URBAN_CATEGORIES
+from tta.engine import effects, military
+from tta.engine.enums import URBAN_CATEGORIES
 from tta.engine.model import CardDB
 from tta.engine.state import PlayerState
 from tta.engine.tracks import happiness_required
@@ -67,22 +69,18 @@ def civ_values(db: CardDB, p: PlayerState) -> CivValues:
             if workers > 0:
                 _add_all(bonus, db.get(card_id).urban_produces, scale=workers)
 
-    for category in UNIT_CATEGORIES:
-        for card_id, workers in p.buildings.get(category.value, {}).items():
-            if workers > 0:
-                strength = db.get(card_id).strength
-                if strength:
-                    bonus["strength"] = bonus.get("strength", 0) + strength * workers
-
     for card_id in p.wonders:
         _add_all(bonus, db.get(card_id).wonder_bonus)
 
     _add_all(bonus, effects.static_bonuses(db, p))
 
+    # 军力 = army_strength(单位基础 + 阵型加成) + 静态加成("strength" 键)
+    strength = military.army_strength(db, p) + bonus.get("strength", 0)
+
     return CivValues(
         science_rate=max(0, bonus.get("science", 0)),
         culture_rate=max(0, bonus.get("culture", 0)),
-        strength=max(0, bonus.get("strength", 0)),
+        strength=max(0, strength),
         happiness=min(MAX_HAPPINESS, max(0, bonus.get("happiness", 0))),
         civil_actions=government.civil_actions + bonus.get("civil_actions", 0),
         military_actions=government.military_actions + bonus.get("military_actions", 0),

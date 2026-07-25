@@ -21,12 +21,14 @@
 3. 资源非负: culture / science / civil_actions / military_actions ≥ 0,
    yellow_bank ∈ [0, 18], blue_bank ∈ [0, 蓝点上界], card_tokens ≥ 0。
 4. 卡牌守恒: 牌列 + 当前牌堆 + future_decks + 弃牌堆 + removed
-   + 各玩家(手牌 + developed + 政府 + 场上领袖 + 进行中/完成奇迹)
+   + 各玩家(手牌 + developed + 政府 + 场上领袖 + 进行中/完成奇迹
+   + 实体专属阵型[tactics 且非 tactics_copied])
    + 军事域(military_deck + future_military_decks + military_discard
    + current_events/future_events/past_events + 各玩家军事手牌)
    ≡ 牌库全集(内政 + 军事, multiset; buildings/card_tokens 的键均 ⊆
    developed, 不重复计数; 领袖弃置入弃牌堆、政府更替入弃牌堆、过期入
-   removed; 时代 A 事件堆余量与旧军事牌堆余牌入 removed)。
+   removed; 时代 A 事件堆余量与旧军事牌堆余牌入 removed; 打出阵型手牌
+   -> tactics 字段, 替换时实体卡入军事弃牌堆, 复制引用仅引用不计)。
 5. 序列化往返: 每 10 步 from_dict(to_dict(state)) == state。
 6. state_hash 链: 同 seed 两次逐步走, 每步 hash 相等(见独立测试)。
 """
@@ -116,6 +118,9 @@ def _accounted(state: GameState) -> Counter:
         accounted.update(p.wonders)
         if p.wonder_progress is not None:
             accounted.update([p.wonder_progress[0]])
+        if p.tactics is not None and not p.tactics_copied:
+            # 专属阵型实体卡(PlayTactics 入场); 复制引用无实体卡不计
+            accounted.update([p.tactics])
     return accounted
 
 

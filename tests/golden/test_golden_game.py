@@ -16,9 +16,9 @@ from tta.orchestrator.runner import run_game
 GOLDEN_SCORES = (0, 0)
 GOLDEN_WINNERS = (0, 1)
 GOLDEN_ROUNDS = 21
-GOLDEN_STEPS = 236
+GOLDEN_STEPS = 227
 GOLDEN_FINAL_STATE_HASH = (
-    "7fd7e09b0f9ffbaa49d10dae085d897d0b9138a366398eb752c1a1a30cd91a44"
+    "25c2f65819b9b0bc6ac2758232b2db16bed472006027676b1e88abaf2825ab7c"
 )
 
 

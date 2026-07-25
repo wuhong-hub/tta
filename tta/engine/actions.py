@@ -96,6 +96,20 @@ class DiscardMilitary:
 
 
 @dataclass(frozen=True)
+class PlayTactics:
+    """打出手牌中的阵型牌: 1 红点, 成为专属阵型; 旧阵型入军事弃牌堆."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class CopyTactics:
+    """复制任一对手已公开的阵型: 2 红点, 不消耗手牌; 与打出合计每回合限 1."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
 class PassTurn:
     """结束本回合行动阶段(回合推进见 Task 8)."""
 
@@ -103,7 +117,8 @@ class PassTurn:
 Action = (
     TakeCard | DevelopTech | DevelopGovernment | Build | Upgrade | Destroy
     | Disband | PlayLeader | BuildWonderStage | PlayActionCard
-    | IncreasePopulation | SkipPolitics | DiscardMilitary | PassTurn
+    | IncreasePopulation | SkipPolitics | DiscardMilitary
+    | PlayTactics | CopyTactics | PassTurn
 )
 
 _ACTION_TYPES: dict[str, type] = {
@@ -120,6 +135,8 @@ _ACTION_TYPES: dict[str, type] = {
     "increase_population": IncreasePopulation,
     "skip_politics": SkipPolitics,
     "discard_military": DiscardMilitary,
+    "play_tactics": PlayTactics,
+    "copy_tactics": CopyTactics,
     "pass": PassTurn,
 }
 _TYPE_NAMES: dict[type, str] = {v: k for k, v in _ACTION_TYPES.items()}

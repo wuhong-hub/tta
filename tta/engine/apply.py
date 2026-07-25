@@ -16,6 +16,7 @@ from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
+    CopyTactics,
     Destroy,
     DevelopGovernment,
     DevelopTech,
@@ -26,6 +27,7 @@ from tta.engine.actions import (
     PassTurn,
     PlayActionCard,
     PlayLeader,
+    PlayTactics,
     SkipPolitics,
     TakeCard,
     Upgrade,
@@ -75,6 +77,10 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return _play_action_card(db, state, action)
     if isinstance(action, DiscardMilitary):
         return _discard_military(db, state, action)
+    if isinstance(action, PlayTactics):
+        return _play_tactics(db, state, action)
+    if isinstance(action, CopyTactics):
+        return _copy_tactics(db, state, action)
     if isinstance(action, IncreasePopulation):
         return _increase_population(db, state)
     msg = f"未知动作类型: {action!r}"  # pragma: no cover
@@ -396,6 +402,43 @@ def _discard_military(
     state = _update(state, idx, p)
     # 弃牌结算完毕 -> 继续回合推进(下一位玩家的回合开始此刻才发生)
     return turn.proceed(state, db)
+
+
+def _set_tactics(
+    state: GameState, idx: int, card_id: str, cost: int, *, copied: bool,
+) -> GameState:
+    """打出/复制阵型公共结算: 扣红点, 旧阵型离场, 置新专属阵型.
+
+    旧阵型为实体卡(tactics_copied=False, 由 PlayTactics 入场)时入军事弃牌堆;
+    为复制引用时仅丢弃引用(无实体卡, 不产生幻影卡)。新阵型
+    tactics_public=False(打出的当回合不公开), 回合开始阶段强制公开
+    (规则书 p3, 见 turn._reveal_tactics); tactics_this_turn=True(打出与复制
+    合计每回合限 1, 规则书 p6)。
+    """
+    p = state.players[idx]
+    p = replace(p, military_actions=p.military_actions - cost)
+    if p.tactics is not None and not p.tactics_copied:
+        state = replace(
+            state, military_discard=state.military_discard + (p.tactics,))
+    p = replace(p, tactics=card_id, tactics_public=False,
+                tactics_this_turn=True, tactics_copied=copied)
+    return _update(state, idx, p)
+
+
+def _play_tactics(db: CardDB, state: GameState, action: PlayTactics) -> GameState:
+    """打出手牌中的阵型牌: 1 红点, 手牌移除该卡, 成为专属阵型(实体卡)."""
+    idx = acting_index(state)
+    p = state.players[idx]
+    hand = list(p.hand_military)
+    hand.remove(action.card_id)
+    state = _update(state, idx, replace(p, hand_military=tuple(hand)))
+    return _set_tactics(state, idx, action.card_id, 1, copied=False)
+
+
+def _copy_tactics(db: CardDB, state: GameState, action: CopyTactics) -> GameState:
+    """复制对手已公开的阵型: 2 红点, 不消耗手牌, 成为自己的专属阵型(引用)."""
+    idx = acting_index(state)
+    return _set_tactics(state, idx, action.card_id, 2, copied=True)
 
 
 def _increase_population(db: CardDB, state: GameState) -> GameState:
