@@ -3,7 +3,7 @@
 
 每回合限 1 政治行动: POLITICS 相位 legal = 政治动作 + SkipPolitics(见
 legal.py), 任一政治动作结算后置 phase=ACTION(Julius Caesar 一次性双政治
-T10)。战争/条约/退出动作类型已建(actions.py), 结算见 T9/T10。
+T10)。战争(T9, 本文件末尾)与条约/退出(T10)动作类型见 actions.py。
 
 SeedEvent 结算(规则书 p4/p7):
 1. 军事手牌中的 EVENT 卡面朝下压入 future_events 顶;
@@ -71,6 +71,7 @@ from tta.engine.actions import (
     ColonizePass,
     ColonizePlayBonus,
     ColonizeSacrifice,
+    DeclareWar,
     DiscardForStrength,
     IllegalActionError,
     PlayAggression,
@@ -113,7 +114,8 @@ def politics_actions(db: CardDB, state: GameState) -> list[Action]:
     """POLITICS 相位可用政治动作(不含 SkipPolitics, 由 legal 追加).
 
     当前为 SeedEvent(军事手牌中的 EVENT 卡) + PlayAggression(军事手牌中
-    的 AGGRESSION 卡 × 合法目标); 战争/条约动作 T9/T10 加入。
+    的 AGGRESSION 卡 × 合法目标) + DeclareWar(军事手牌中的 WAR 卡 × 合法
+    目标); 条约动作 T10 加入。
     RULES-CHECK(规则书 p4 未禁止): 时代 IV 无军事牌可抽, 但手牌中已有的
     事件牌仍可筹划、侵略牌仍可打出。
     """
@@ -125,6 +127,7 @@ def politics_actions(db: CardDB, state: GameState) -> list[Action]:
         if db.get(card_id).category is CardCategory.EVENT
     ]
     actions.extend(_aggression_actions(db, state, idx, p))
+    actions.extend(_war_actions(db, state, idx, p))
     return actions
 
 
@@ -896,4 +899,243 @@ AGGRESSION_HANDLERS.update({
     "infiltrate_ii": _infiltrate_ii,
     "spy_ii": _spy_ii,
     "armed_intervention_iii": _armed_intervention_iii,
+})
+
+
+# --- 战争宣告与结算(规则书 p3-p4 战争, P2-T9) -------------------------------------
+
+KIND_WAR_SEIZE = "war_seize_tech"
+"""科技之战胜者夺取特殊科技 pending: responder=胜者, context={loser,
+options(可夺取的特殊科技卡 id, 逗号连接快照)}; 可放弃(DeclineResponse)。"""
+
+WAR_TERRITORY_BASE = 1
+"""领土之战黄点基数(PDF: -黄点 equal to 1 + 1/5 adv. of winner)."""
+
+WAR_TERRITORY_DIVISOR = 5
+"""领土之战军力差除数(向下取整)."""
+
+WAR_CULTURE_BASE = 5
+"""文化之战文化基数(PDF: -文化 equal to 5 + adv. of winner)."""
+
+WarHandler = Callable[[GameState, CardDB, int, int, int], GameState]
+"""战争效果处理器签名: (state, db, winner, loser, 军力差) -> 新 state."""
+
+WAR_HANDLERS: dict[str, WarHandler] = {}
+"""战争效果注册表: handler 名(= 卡 id) -> 处理器(注册见文件末尾)."""
+
+
+def _war_actions(
+    db: CardDB, state: GameState, idx: int, p: PlayerState,
+) -> list[DeclareWar]:
+    """DeclareWar 枚举(规则书 p4 宣告战争).
+
+    合法性: 手牌中的 WAR 卡(handler 已注册)、目标非己、无停战类条约
+    (双方 pacts 同录 ATTACK_BLOCKING_PACTS)、军事行动费足够(目标领袖为
+    甘地时费用 ×2; 宣告方领袖为甘地时不可打出战争牌——甘地卡文本"你不
+    能打出侵略或战争牌")、最后的游戏轮不可宣告(规则书 p4 限制)。
+    与侵略不同: 规则书未禁止向军力等级大于或等于你的玩家宣战。
+    """
+    if state.last_round:
+        # 规则书 p4: 你不能在最后的游戏轮宣告战争
+        return []
+    if p.leader == effects.LEADER_GANDHI:
+        return []
+    actions: list[DeclareWar] = []
+    for card_id in dict.fromkeys(p.hand_military):
+        card = db.get(card_id)
+        if card.category is not CardCategory.WAR:
+            continue
+        # 未注册处理器的战争牌不可打出(与侵略牌同口径)
+        if card.handler not in WAR_HANDLERS:
+            continue
+        for target, tp in enumerate(state.players):
+            if target == idx:
+                continue
+            if _pact_blocks_attack(p, tp):
+                continue
+            if p.military_actions < aggression_cost(tp, card):
+                continue
+            actions.append(DeclareWar(card_id, target))
+    return actions
+
+
+def declare_war(db: CardDB, state: GameState, action: DeclareWar) -> GameState:
+    """DeclareWar 结算: 付军事行动费, 战争牌手牌 -> declared_wars(在途).
+
+    合法性由 legal 保证(见 _war_actions)。战争在宣告者的下个回合开始
+    阶段结算(规则书 p4, 见 resolve_declared_wars), 宣告当回合不结算;
+    phase -> ACTION(每回合限 1 政治行动)。
+    """
+    idx = state.current_player
+    p = state.players[idx]
+    card = db.get(action.card_id)
+    cost = aggression_cost(state.players[action.target], card)
+    hand = list(p.hand_military)
+    hand.remove(action.card_id)
+    p = replace(
+        p, hand_military=tuple(hand),
+        military_actions=p.military_actions - cost,
+        declared_wars=p.declared_wars + ((action.card_id, action.target),))
+    state = replace_player(state, idx, p)
+    return replace(state, phase=Phase.ACTION)
+
+
+def resolve_declared_wars(db: CardDB, state: GameState) -> GameState:
+    """回合开始阶段结算当前玩家 declared_wars 中的全部战争(逐张).
+
+    规则书 p3 回合流程: 补充卡牌列 -> 结算战争 -> 公开专属阵型(本函数由
+    turn.proceed 在补牌后、公开阵型前调用)。比较双方 civ.strength(纯军力
+    等级; 规则书 p3 注意: 结算战争时, 双方都不可以打出军事奖励牌来增加
+    自己的军力等级)。平局无效果; 有胜负按战争牌效果结算(军力差 = 胜者
+    军力优势)。无论如何, 战争牌最终都入军事弃牌堆。
+    临时军力加成(事件给的临时军力)在比较时应计入——本阶段无此类事件,
+    暂仅 civ.strength(规则书 p3: 可先附加奖励再进行战争的结算)。
+    """
+    idx = state.current_player
+    while state.players[idx].declared_wars:
+        card_id, target = state.players[idx].declared_wars[0]
+        attacker_strength = civ_values(db, state.players[idx]).strength
+        target_strength = civ_values(db, state.players[target]).strength
+        # 战争牌无论结果均入军事弃牌堆, declared_wars 移除该卡
+        p = state.players[idx]
+        state = replace_player(
+            state, idx, replace(p, declared_wars=p.declared_wars[1:]))
+        state = replace(
+            state, military_discard=state.military_discard + (card_id,))
+        if attacker_strength == target_strength:
+            # 规则书 p3: 双方军力相等, 战争的结算不会产生任何效果
+            continue
+        if attacker_strength > target_strength:
+            winner, loser = idx, target
+        else:
+            winner, loser = target, idx
+        diff = abs(attacker_strength - target_strength)
+        handler = WAR_HANDLERS[db.get(card_id).handler]
+        state = handler(state, db, winner, loser, diff)
+    return state
+
+
+def war_seize_options(
+    db: CardDB, winner: PlayerState, loser: PlayerState,
+) -> list[str]:
+    """科技之战可夺取的特殊科技卡 id(败方 developed 中的 SPECIAL).
+
+    规则书 p3: 胜利者不能夺取与自己游戏区域或手牌中同名的特殊科技牌。
+    """
+    blocked = set(winner.developed) | set(winner.hand_civil)
+    return [
+        card_id for card_id in loser.developed
+        if db.get(card_id).category is CardCategory.SPECIAL
+        and card_id not in blocked
+    ]
+
+
+def apply_war_seize(
+    db: CardDB, state: GameState, option: str,
+) -> GameState:
+    """war_seize_tech pending 的 ChooseEventOption 结算(可选, 已选择夺取).
+
+    夺取的特殊科技免费加入胜者游戏区域(不触发研发即时收益); 若与胜者
+    游戏区域中同类型的特殊科技并存, 保留等级较高者并弃置另一张
+    (规则书 p3; 等级比较与 apply._replace_lower_special 同口径: 先比
+    时代序, 同级按 cost_science; 此处按战争规则文本弃置入民政弃牌堆)。
+    """
+    pending = state.pending[0]
+    winner = acting_index(state)
+    loser = int(pending.context["loser"])
+    state = replace(state, pending=state.pending[1:])
+    lp = state.players[loser]
+    loser_developed = list(lp.developed)
+    loser_developed.remove(option)
+    state = replace_player(
+        state, loser, replace(lp, developed=tuple(loser_developed)))
+    wp = state.players[winner]
+    state = replace_player(
+        state, winner, replace(wp, developed=wp.developed + (option,)))
+    return _war_seize_replace_same_type(db, state, winner, option)
+
+
+def _war_seize_replace_same_type(
+    db: CardDB, state: GameState, winner: int, new_card_id: str,
+) -> GameState:
+    """夺取后同类型特殊科技两张并存 -> 保留等级较高者, 弃置另一张."""
+    new_type = db.get(new_card_id).special_type
+    p = state.players[winner]
+    same = [
+        card_id for card_id in p.developed
+        if db.get(card_id).category is CardCategory.SPECIAL
+        and db.get(card_id).special_type is new_type
+    ]
+    if len(same) < 2:
+        return state
+
+    def _level(card_id: str) -> tuple[int, int]:
+        card = db.get(card_id)
+        return (_AGE_LEVEL_ORDER.index(card.age), card.cost_science)
+
+    lower = min(same, key=_level)
+    developed = list(p.developed)
+    developed.remove(lower)
+    state = replace_player(
+        state, winner, replace(p, developed=tuple(developed)))
+    return replace(state, discard=state.discard + (lower,))
+
+
+# --- 战争效果处理器(handler 名 = 卡 id) -----------------------------------------
+
+
+def _war_over_technology(
+    state: GameState, db: CardDB, winner: int, loser: int, diff: int,
+) -> GameState:
+    """war_over_technology_ii: 败者 -科技 = 军力差(下限 0), 胜者 +实失量;
+    胜者并可夺取对方 1 张特殊科技牌(压 war_seize_tech pending, 可放弃;
+    无可夺取目标时不压)。"""
+    lp = state.players[loser]
+    lost = min(diff, lp.science)
+    state = replace_player(state, loser, replace(lp, science=lp.science - lost))
+    wp = state.players[winner]
+    state = replace_player(
+        state, winner, replace(wp, science=wp.science + lost))
+    options = war_seize_options(db, state.players[winner], state.players[loser])
+    if options:
+        pending = PendingEffect(
+            KIND_WAR_SEIZE, 0, responder=winner,
+            context={"loser": loser, "options": ",".join(options)})
+        state = replace(state, pending=state.pending + (pending,))
+    return state
+
+
+def _war_over_territory(
+    state: GameState, db: CardDB, winner: int, loser: int, diff: int,
+) -> GameState:
+    """war_over_territory_ii: 败者 -黄点 = 1 + 军力差÷5(向下取整); 胜者
+    获得等量(黄点银行转移, 不足则全给——规则书 p10: 从黄色人口区拿取,
+    不足时尽可能拿取)。"""
+    amount = WAR_TERRITORY_BASE + diff // WAR_TERRITORY_DIVISOR
+    lp = state.players[loser]
+    moved = min(amount, lp.yellow_bank)
+    state = replace_player(
+        state, loser, replace(lp, yellow_bank=lp.yellow_bank - moved))
+    wp = state.players[winner]
+    return replace_player(
+        state, winner, replace(wp, yellow_bank=wp.yellow_bank + moved))
+
+
+def _war_over_culture(
+    state: GameState, db: CardDB, winner: int, loser: int, diff: int,
+) -> GameState:
+    """war_over_culture_iii: 败者 -文化 = 5 + 军力差(下限 0); 胜者 +实失量
+    (规则书 p11: 夺取文化点数时, 对方不足则只能夺取其已有的全部点数)。"""
+    lp = state.players[loser]
+    lost = min(WAR_CULTURE_BASE + diff, lp.culture)
+    state = replace_player(state, loser, replace(lp, culture=lp.culture - lost))
+    wp = state.players[winner]
+    return replace_player(
+        state, winner, replace(wp, culture=wp.culture + lost))
+
+
+WAR_HANDLERS.update({
+    "war_over_technology_ii": _war_over_technology,
+    "war_over_territory_ii": _war_over_territory,
+    "war_over_culture_iii": _war_over_culture,
 })

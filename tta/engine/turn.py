@@ -28,8 +28,10 @@ advance(state, db) 流程:
    IV -> 下一轮为最后一轮)。
 3. 回合开始(nxt 玩家): round == 1 -> 全部跳过; 否则弃最左
    N(2/3/4 人 -> 3/2/1)个位置的牌入 removed -> 左移紧凑 -> 补牌
-   -> 强制公开专属阵型(规则书 p3: tactics 非 None 且未公开 ->
-   tactics_public=True):
+   -> 结算战争(规则书 p3 回合流程: 补充卡牌列 -> 结算战争 -> 公开
+   专属阵型; 当前玩家 declared_wars 逐张结算, 见
+   politics.resolve_declared_wars)-> 强制公开专属阵型(规则书 p3:
+   tactics 非 None 且未公开 -> tactics_public=True):
    - 时代 A 于第一次补牌时结束: 先用 A 堆补空位, 余牌入 removed, 启用
      I 堆继续补(官方规则: 时代 A 结束 nothing else happens -> 无过期,
      也无每人 -2 黄点);
@@ -49,7 +51,7 @@ advance(state, db) 流程:
 
 from dataclasses import replace
 
-from tta.engine import civ, economy, effects, military
+from tta.engine import civ, economy, effects, military, politics
 from tta.engine.enums import Age, Phase
 from tta.engine.model import CardDB
 from tta.engine.state import (
@@ -117,6 +119,8 @@ def proceed(state: GameState, db: CardDB) -> GameState:
             state = replace(state, last_round=True)
     state = replace(state, current_player=nxt, phase=Phase.TURN_START)
     state = _start_of_turn(state, db)
+    # 规则书 p3 回合流程: 补充卡牌列 -> 结算战争 -> 公开专属阵型
+    state = politics.resolve_declared_wars(db, state)
     state = _reveal_tactics(state)
     # 第一回合跳过政治阶段(回合开始阶段 _start_of_turn 对 round==1 本就跳过)
     phase = Phase.ACTION if state.round == 1 else Phase.POLITICS

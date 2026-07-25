@@ -25,6 +25,7 @@ from tta.engine.actions import (
     ColonizePlayBonus,
     ColonizeSacrifice,
     CopyTactics,
+    DeclareWar,
     DeclineResponse,
     Destroy,
     DevelopGovernment,
@@ -81,6 +82,8 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return politics.seed_event(db, state, action)
     if isinstance(action, PlayAggression):
         return politics.play_aggression(db, state, action)
+    if isinstance(action, DeclareWar):
+        return politics.declare_war(db, state, action)
     if isinstance(action, PlayDefenseBonus):
         return politics.play_defense_bonus(db, state, action)
     if isinstance(action, DiscardForStrength):
@@ -92,6 +95,10 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
                 and state.pending[0].kind in politics.AGGRESSION_CHOICE_KINDS):
             # 受害者选择类侵略 pending(强制失去)由 politics 结算
             return politics.apply_aggression_choice(db, state, action.option)
+        if (state.pending
+                and state.pending[0].kind == politics.KIND_WAR_SEIZE):
+            # 科技之战胜者夺取特殊科技 pending 由 politics 结算
+            return politics.apply_war_seize(db, state, action.option)
         return events.apply_event_choice(db, state, action.option)
     if isinstance(action, ColonizeBid):
         return politics.colonize_bid(db, state, action)

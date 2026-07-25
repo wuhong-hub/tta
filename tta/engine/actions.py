@@ -139,7 +139,9 @@ class PassResponse:
 
 @dataclass(frozen=True)
 class DeclareWar:
-    """宣告战争(类型与序列化 P2-T5; 结算 T9)."""
+    """宣告战争(政治行动, 结算见 politics.declare_war): 付军事行动费,
+    战争牌入 declared_wars, 宣告者下个回合开始阶段结算(规则书 p4)。
+    最后的游戏轮不可宣告; 与侵略不同, 可向军力更强者宣战。"""
 
     card_id: str
     target: int

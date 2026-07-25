@@ -3,15 +3,16 @@
 用 stdlib random 驱动随机合法动作, 跑 10 个种子的 2 人整局, 每步断言:
 
 1. 黄点守恒(每人): yellow_bank + worker_pool + 建筑工人数
-   = 25 − 2 × (已结束的时代 I/II/III 数) + uncertain_borders 净转入。
+   = 25 − 2 × (已结束的时代 I/II/III 数) + 转移净转入。
    口径说明: 时代 A 结束官方规则 "nothing else happens"(无 −2),
    时代 I/II/III 结束各 −2(turn.py AGE_END_YELLOW_LOSS; III 结束进入
    时代 IV 前在 _enter_age_four 执行同一序列)。由 state.age 推断已结束的
    时代 I/II/III 数: A/I -> 0, II -> 1, III -> 2, IV -> 3。引擎对 −2 做
    下限 0 截断(max(0, bank − 2)), 时代结束时 yellow_bank 实际恒 ≥ 2,
-   等号成立。uncertain_borders 事件(时代 I)将 1 黄点从最弱银行转入最强
-   银行, 是全引擎唯一改变每人黄点总量的效果; 驱动循环在筹划揭示该事件时
-   按结算前后差值累计净转入(yellow_adj), 其余步骤严格等号。
+   等号成立。玩家间零和转移 = uncertain_borders 事件(时代 I, 最弱银行
+   转 1 黄点给最强银行)与领土之战(war_over_territory_ii, 黄点银行
+   转移, P2-T9); 驱动循环在转移步骤按结算前后差值累计净转入
+   (yellow_adj)并断言零和, 其余步骤严格等号。
 2. 蓝点守恒(每人, 精确等号): blue_bank + Σ card_tokens + 进行中奇迹
    已付阶段数 == 16 + 3 × (本局已成功研发 justice_system +
    civil_service 的次数, 由驱动循环按 DevelopTech 动作追踪)。
@@ -24,13 +25,15 @@
    yellow_bank ∈ [0, 18], blue_bank ∈ [0, 蓝点上界], card_tokens ≥ 0。
 4. 卡牌守恒: 牌列 + 当前牌堆 + future_decks + 弃牌堆 + removed
    + 各玩家(手牌 + developed + 政府 + 场上领袖 + 进行中/完成奇迹
-   + 实体专属阵型[tactics 且非 tactics_copied])
+   + 实体专属阵型[tactics 且非 tactics_copied] + 在途战争牌
+   declared_wars 的卡 id)
    + 军事域(military_deck + future_military_decks + military_discard
    + current_events/future_events/past_events + 各玩家军事手牌)
    ≡ 牌库全集(内政 + 军事, multiset; buildings/card_tokens 的键均 ⊆
    developed, 不重复计数; 领袖弃置入弃牌堆、政府更替入弃牌堆、过期入
    removed; 时代 A 事件堆余量与旧军事牌堆余牌入 removed; 打出阵型手牌
-   -> tactics 字段, 替换时实体卡入军事弃牌堆, 复制引用仅引用不计)。
+   -> tactics 字段, 替换时实体卡入军事弃牌堆, 复制引用仅引用不计;
+   宣告战争手牌 -> declared_wars(在途), 结算后入军事弃牌堆)。
 5. 序列化往返: 每 10 步 from_dict(to_dict(state)) == state。
 6. state_hash 链: 同 seed 两次逐步走, 每步 hash 相等(见独立测试)。
 """
@@ -55,6 +58,7 @@ from tta.engine.state import (
     to_dict,
     workers_total,
 )
+from tta.engine.turn import AGE_END_YELLOW_LOSS
 
 SEEDS = range(10)
 """整局属性测试的种子集."""
@@ -132,6 +136,9 @@ def _accounted(state: GameState) -> Counter:
         if p.tactics is not None and not p.tactics_copied:
             # 专属阵型实体卡(PlayTactics 入场); 复制引用无实体卡不计
             accounted.update([p.tactics])
+        # 在途战争牌(DeclareWar 手牌 -> declared_wars, 次回合结算后入
+        # 军事弃牌堆; 与 T8 侵略在途口径一致)
+        accounted.update(card_id for card_id, _ in p.declared_wars)
     return accounted
 
 
@@ -199,17 +206,40 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
             # 研发 justice_system/civil_service 各从盒中 +3 蓝点(含
             # breakthrough pending 子行动; 替换移除不影响已得蓝点)
             blue_gains[state.current_player] += 1
-        # uncertain_borders: 最弱银行转 1 黄点给最强银行(唯一改变每人黄点
-        # 总量的效果), 按结算前后差值累计净转入
+        # 黄点零和转移步骤识别(口径见模块 docstring 第 1 条):
+        # ① uncertain_borders 揭示(筹划动作 + 当前事件堆顶即该事件);
+        # ② 领土之战于本步结算(war_over_territory_ii 离开 declared_wars)。
         uncertain = (
             isinstance(action, SeedEvent)
             and state.current_events[:1] == ("uncertain_borders",)
         )
-        before = [_yellow_total(p) for p in state.players] if uncertain else []
+        territory_wars_before = sum(
+            card_id == "war_over_territory_ii"
+            for p in state.players for card_id, _ in p.declared_wars
+        )
+        before = [_yellow_total(p) for p in state.players]
+        age_before = state.age
         state = apply(state, action, db)
-        if uncertain:
-            for i, p in enumerate(state.players):
-                yellow_adj[i] += _yellow_total(p) - before[i]
+        ended = (_AGE_ENDED_YELLOW_LOSS_COUNT[state.age]
+                 - _AGE_ENDED_YELLOW_LOSS_COUNT[age_before])
+        deltas = [
+            _yellow_total(p) - before[i] + AGE_END_YELLOW_LOSS * ended
+            for i, p in enumerate(state.players)
+        ]
+        territory_wars_after = sum(
+            card_id == "war_over_territory_ii"
+            for p in state.players for card_id, _ in p.declared_wars
+        )
+        if uncertain or territory_wars_after < territory_wars_before:
+            # 转移步骤: 玩家间零和(不足封顶仍零和), 累计净转入
+            assert sum(deltas) == 0, (
+                f"seed {seed} step {steps} 黄点转移非零和: {deltas}")
+            for i, delta in enumerate(deltas):
+                yellow_adj[i] += delta
+        else:
+            # 其余步骤: 每人黄点总量仅随时代结束 -2(已加回)变化
+            assert all(delta == 0 for delta in deltas), (
+                f"seed {seed} step {steps} 非转移步骤黄点变动: {deltas}")
         steps += 1
         for i, p in enumerate(state.players):
             _assert_player_invariants(

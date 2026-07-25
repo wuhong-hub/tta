@@ -143,7 +143,7 @@ def test_player_military_fields_serialization_roundtrip() -> None:
         tactics_public=True,
         tactics_this_turn=True,
         colonies=("territory_x",),
-        declared_wars=("war_y",),
+        declared_wars=(("war_y", 1),),
         pacts=("pact_z",),
         caesar_used=True,
     )

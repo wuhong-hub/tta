@@ -190,10 +190,11 @@ RAID_III = _aggression(
 )
 
 # --- 战争牌(PDF 第 3 页 War 表) -------------------------------------------------
+# Cost 列 = 军事行动费; Loser/Winner 列的刀剑图标 = 胜者的军力优势(军力差)。
 
 WAR_OVER_TECHNOLOGY_II = _war(
     "war_over_technology_ii", "科技之战", "War over Technology", Age.II, 2, 2,
-    "败者:-科技,等于胜者的科技优势。胜者:+所失科技;可夺取蓝色科技。",
+    "败者:-科技,等于胜者的军力优势。胜者:+所失科技;可夺取对方 1 张特殊科技牌。",
 )
 WAR_OVER_TERRITORY_II = _war(
     "war_over_territory_ii", "领土之战", "War over Territory", Age.II, 2, 2,
@@ -201,7 +202,7 @@ WAR_OVER_TERRITORY_II = _war(
 )
 WAR_OVER_CULTURE_III = _war(
     "war_over_culture_iii", "文化之战", "War over Culture", Age.III, 3, 6,
-    "败者:-文化,等于 5 + 胜者的文化优势。胜者:获得等量。",
+    "败者:-文化,等于 5 + 胜者的军力优势。胜者:获得等量。",
 )
 
 # --- 条约牌(PDF 第 3 页 Pact 表, A/B 列效果; 2 人局移除) --------------------------

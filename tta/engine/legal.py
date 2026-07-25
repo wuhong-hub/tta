@@ -77,6 +77,13 @@ from tta.engine.state import GameState, PendingEffect, PlayerState, acting_index
 ROW_COSTS: tuple[int, ...] = (1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3)
 """卡牌列各位置拿牌白点费(0-4 号位 1 点, 5-9 号位 2 点, 10-12 号位 3 点)."""
 
+_DECLINABLE_PENDING_KINDS: frozenset[str] = (
+    events.DECLINABLE_PENDING_KINDS | frozenset({politics.KIND_WAR_SEIZE})
+)
+"""可放弃 pending 白名单: 事件/行动卡白名单 + 科技之战夺取(可选效果,
+规则书 p3: 胜利者"可以"夺取; 白名单定义于 events, 战争 kind 属 politics,
+在此合并以避免 events <-> politics 循环 import)。"""
+
 UNIT_BUILD_DISCOUNT_KEY = effects.UNIT_BUILD_DISCOUNT_KEY
 """turn_discounts 中兵种建造折扣的键(回合修饰类行动卡写入)."""
 
@@ -401,6 +408,11 @@ def _pending_actions(
         # infiltrate: 弃领袖或未完成奇迹(强制; 压入前已保证非空)
         return [ChooseEventOption(option)
                 for option in politics.infiltrate_options(p)]
+    if pending.kind == politics.KIND_WAR_SEIZE:
+        # 科技之战: 胜者夺取败方 1 张特殊科技(可选; 可夺取集合在压入时
+        # 快照入 context, 与 war_seize_options 同口径; 放弃由白名单兜底)
+        return [ChooseEventOption(card_id)
+                for card_id in str(pending.context["options"]).split(",")]
     return []
 
 
@@ -584,9 +596,9 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
         # current_player、处于 ACTION 相位且栈中无他玩家 responder。
         actor = acting_index(state)
         actions = _pending_actions(db, state.players[actor], state.pending[0])
-        if state.pending[0].kind in events.DECLINABLE_PENDING_KINDS:
+        if state.pending[0].kind in _DECLINABLE_PENDING_KINDS:
             actions.append(DeclineResponse())
-        if (state.pending[0].kind in events.DECLINABLE_PENDING_KINDS
+        if (state.pending[0].kind in _DECLINABLE_PENDING_KINDS
                 and actor == state.current_player
                 and state.phase is Phase.ACTION
                 and all(e.responder in (None, state.current_player)

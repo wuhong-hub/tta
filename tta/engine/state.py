@@ -66,7 +66,8 @@ class PlayerState:
     tactics_this_turn: bool = False          # 本回合已打出/复制阵型(限 1)
     tactics_copied: bool = False             # 当前阵型为复制引用(无实体卡, 替换时不入弃牌堆)
     colonies: tuple[str, ...] = ()
-    declared_wars: tuple[str, ...] = ()      # 已宣告待结算的战争牌
+    # 已宣告待结算的战争牌: (卡 id, 目标座位); 宣告者下个回合开始阶段结算
+    declared_wars: tuple[tuple[str, int], ...] = ()
     pacts: tuple[str, ...] = ()              # 生效中的条约(卡 id, 3-4 人)
     caesar_used: bool = False                # Julius Caesar 双政治一次性
     civil_action_debt: int = 0               # 下回合白点扣减(rebellion 事件;
@@ -173,7 +174,7 @@ def _player_to_dict(p: PlayerState) -> dict:
         "tactics_this_turn": p.tactics_this_turn,
         "tactics_copied": p.tactics_copied,
         "colonies": list(p.colonies),
-        "declared_wars": list(p.declared_wars),
+        "declared_wars": [list(w) for w in p.declared_wars],
         "pacts": list(p.pacts),
         "caesar_used": p.caesar_used,
     }
@@ -211,7 +212,10 @@ def _player_from_dict(d: dict) -> PlayerState:
         tactics_this_turn=d.get("tactics_this_turn", False),
         tactics_copied=d.get("tactics_copied", False),
         colonies=tuple(d.get("colonies", ())),
-        declared_wars=tuple(d.get("declared_wars", ())),
+        # (卡 id, 目标座位) 元组; 兼容旧格式纯卡 id 字符串(目标 -1)
+        declared_wars=tuple(
+            (str(w[0]), int(w[1])) if isinstance(w, (list, tuple)) else (str(w), -1)
+            for w in d.get("declared_wars", ())),
         pacts=tuple(d.get("pacts", ())),
         caesar_used=d.get("caesar_used", False),
         civil_action_debt=d.get("civil_action_debt", 0),
