@@ -441,9 +441,18 @@ def test_newton_develop_tech_gets_civil_action_back(db: CardDB) -> None:
     assert new2.players[0].civil_actions == 2
 
 
-def test_shakespeare_cook_bach_deferred(db: CardDB) -> None:
-    """shakespeare/cook/bach: 互动能力 P2-DEFERRED, 无钩子."""
-    for card_id in ("william_shakespeare", "james_cook", "j_s_bach"):
+def test_shakespeare_static_happiness(db: CardDB) -> None:
+    """william_shakespeare: +1 笑脸(静态, T12 审查补登); 配对/折扣仍 P2."""
+    p = _player(leader="william_shakespeare")
+    assert effects.static_bonuses(db, p) == {"happiness": 1}
+    civ = civ_values(db, p)
+    assert civ.happiness == 1
+    assert "P2-DEFERRED" in db.get("william_shakespeare").text
+
+
+def test_cook_bach_deferred(db: CardDB) -> None:
+    """cook/bach: 互动能力 P2-DEFERRED, 无钩子."""
+    for card_id in ("james_cook", "j_s_bach"):
         card = db.get(card_id)
         assert card.handler == "", card_id
         assert "P2-DEFERRED" in card.text, card_id

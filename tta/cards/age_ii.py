@@ -241,6 +241,7 @@ WILLIAM_SHAKESPEARE = _leader(
     "+1 笑脸; 每有一对图书馆与剧院, +2 文化; 若你有图书馆, 剧院少花 "
     "1 内政行动与 1 资源, 反之亦然(配对文化口径与折扣均需进一步确认, "
     "P2-DEFERRED)。",
+    handler="william_shakespeare",
 )
 
 JAMES_COOK = _leader(
