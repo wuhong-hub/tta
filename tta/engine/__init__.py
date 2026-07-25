@@ -1,5 +1,23 @@
-"""规则引擎公开接口(P1 重构中: 当前导出 tracks/enums/model/rng/state)."""
+"""规则引擎公开接口(P1 重构中: tracks/enums/model/rng/state/actions/legal/apply)."""
 
+from tta.engine.actions import (
+    Action,
+    Build,
+    BuildWonderStage,
+    Destroy,
+    DevelopGovernment,
+    DevelopTech,
+    Disband,
+    IllegalActionError,
+    PassTurn,
+    PlayActionCard,
+    PlayLeader,
+    TakeCard,
+    Upgrade,
+    action_from_dict,
+    action_to_dict,
+)
+from tta.engine.apply import apply
 from tta.engine.enums import (
     UNIT_CATEGORIES,
     URBAN_CATEGORIES,
@@ -9,6 +27,7 @@ from tta.engine.enums import (
     DeckType,
     SpecialType,
 )
+from tta.engine.legal import ROW_COSTS, legal_actions
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
 from tta.engine.rng import rng_below, rng_shuffle
 from tta.engine.state import (
@@ -30,10 +49,15 @@ from tta.engine.tracks import (
 )
 
 __all__ = [
-    "ROW_SLOTS", "UNIT_CATEGORIES", "URBAN_CATEGORIES", "WORKER_CATEGORIES",
-    "Age", "CardCategory", "CardDB", "CardDefinition", "DeckType",
-    "GameState", "GovernmentStats", "PendingEffect", "PlayerState",
-    "SpecialType", "consumption_value", "corruption_value", "from_dict",
-    "happiness_required", "population_cost", "replace_player", "rng_below",
-    "rng_shuffle", "state_hash", "to_dict", "workers_total",
+    "ROW_COSTS", "ROW_SLOTS", "UNIT_CATEGORIES", "URBAN_CATEGORIES",
+    "WORKER_CATEGORIES", "Action", "Age", "Build", "BuildWonderStage",
+    "CardCategory", "CardDB", "CardDefinition", "DeckType", "Destroy",
+    "DevelopGovernment", "DevelopTech", "Disband", "GameState",
+    "GovernmentStats", "IllegalActionError", "PassTurn", "PendingEffect",
+    "PlayActionCard", "PlayLeader", "PlayerState", "SpecialType", "TakeCard",
+    "Upgrade", "action_from_dict", "action_to_dict", "apply",
+    "consumption_value", "corruption_value", "from_dict",
+    "happiness_required", "legal_actions", "population_cost",
+    "replace_player", "rng_below", "rng_shuffle", "state_hash", "to_dict",
+    "workers_total",
 ]

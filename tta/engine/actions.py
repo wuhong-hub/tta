@@ -1,53 +1,98 @@
-"""动作类型: 扁平、可序列化."""
+"""动作类型: 扁平、可序列化(官方规则 P1)."""
 
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class TakeCard:
-    """从卡牌列拿牌."""
+    """从卡牌列拿牌(奇迹牌拿取即入场, 置 wonder_progress, 不入队手牌)."""
 
     row_index: int
 
 
 @dataclass(frozen=True)
-class Develop:
-    """研发手牌中的科技/政体/兵种卡(付科技点)."""
+class DevelopTech:
+    """研发手牌中的科技/特殊科技/兵种卡: 1 白点(兵种 1 红点) + 科技费."""
 
     card_id: str
+
+
+@dataclass(frozen=True)
+class DevelopGovernment:
+    """变更政体: 和平 1 白点 + 高费; 革命全部剩余白点 + 低费."""
+
+    card_id: str
+    revolution: bool
 
 
 @dataclass(frozen=True)
 class Build:
-    """在已研发建筑/兵种卡上放置 1 个工人(付资源)."""
+    """从空闲池向已研发建筑/兵种卡放 1 工人: 1 白点(兵种 1 红点) + 全额造价."""
 
     card_id: str
 
 
 @dataclass(frozen=True)
-class IncreasePopulation:
-    """增加 1 个人口(付食物)."""
+class Upgrade:
+    """移 1 工人到同类别高等级卡: 1 白点(兵种 1 红点) + 造价差值."""
+
+    from_card_id: str
+    to_card_id: str
+
+
+@dataclass(frozen=True)
+class Destroy:
+    """摧毁农场/矿场/城市建筑: 1 白点, 1 工人回空闲池."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class Disband:
+    """解散军事单位: 1 红点, 1 工人回空闲池."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class PlayLeader:
+    """打出领袖: 1 白点; 替换旧领袖(弃置)并拿回 1 白点(净耗 0)."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class BuildWonderStage:
+    """建奇迹下一阶段: 1 白点 + 左起下一未付阶段费, 蓝点从供给区盖上."""
 
 
 @dataclass(frozen=True)
 class PlayActionCard:
-    """打出手牌中的行动卡."""
+    """打出手牌中的行动卡: 1 白点, 结算见 effects.ACTION_HANDLERS(Task 7)."""
 
     card_id: str
 
 
 @dataclass(frozen=True)
 class PassTurn:
-    """结束本回合行动阶段."""
+    """结束本回合行动阶段(回合推进见 Task 8)."""
 
 
-Action = TakeCard | Develop | Build | IncreasePopulation | PlayActionCard | PassTurn
+Action = (
+    TakeCard | DevelopTech | DevelopGovernment | Build | Upgrade | Destroy
+    | Disband | PlayLeader | BuildWonderStage | PlayActionCard | PassTurn
+)
 
 _ACTION_TYPES: dict[str, type] = {
     "take_card": TakeCard,
-    "develop": Develop,
+    "develop_tech": DevelopTech,
+    "develop_government": DevelopGovernment,
     "build": Build,
-    "increase_population": IncreasePopulation,
+    "upgrade": Upgrade,
+    "destroy": Destroy,
+    "disband": Disband,
+    "play_leader": PlayLeader,
+    "build_wonder_stage": BuildWonderStage,
     "play_action_card": PlayActionCard,
     "pass": PassTurn,
 }
