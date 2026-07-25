@@ -11,15 +11,17 @@ advance(state, db) 流程:
    (terminal, final_scores = 各玩家文化, 事件计分 P2); 否则 round += 1,
    且 age 已为 IV 时 last_round = True(非起始玩家回合开启 IV -> 下一轮
    为最后一轮)。
-3. 回合开始(nxt 玩家): round == 1 或 age == IV -> 全部跳过; 否则弃最左
+3. 回合开始(nxt 玩家): round == 1 -> 全部跳过; 否则弃最左
    N(2/3/4 人 -> 3/2/1)个位置的牌入 removed -> 左移紧凑 -> 补牌:
    - 时代 A 于第一次补牌时结束: 先用 A 堆补空位, 余牌入 removed, 启用
-     I 堆继续补(无过期, 但每人 -2 黄点仍执行);
+     I 堆继续补(官方规则: 时代 A 结束 nothing else happens -> 无过期,
+     也无每人 -2 黄点);
    - 时代 I/II 于当前牌堆最后一张放上牌列时结束: 过期处理(更早时代手牌
      入弃牌堆; 过期领袖入 removed 并清 None, leader_ages 保留; 过期未完成
      奇迹已付阶段蓝点退回 blue_bank 后入 removed) -> 每人 yellow_bank -2
      (下限 0) -> 启用下一时代牌堆继续补;
-   - 时代 III 牌堆尽 -> 时代 IV: 停止补牌, 此后回合开始不弃牌不补牌;
+   - 时代 III 牌堆尽 -> 时代 IV: 停止补牌; 时代 IV 无牌堆但回合开始仍
+     弃最左 N 张并左移, 右侧空位保持空;
      起始玩家回合开启 IV -> 本轮为最后一轮, 否则下一轮为最后一轮。
 """
 
@@ -114,10 +116,11 @@ def _production(db: CardDB, p: PlayerState, values: civ.CivValues) -> PlayerStat
 
 def _start_of_turn(state: GameState, db: CardDB) -> GameState:
     if state.round == 1:
-        return state  # 第一轮不补牌
-    if state.age is Age.IV:
-        return state  # 时代 IV 无牌堆: 不弃牌不补牌
+        return state  # 第一轮不弃牌不补牌
     state = _discard_and_slide(state)
+    if state.age is Age.IV:
+        # 时代 IV 无牌堆: 仍弃最左 N 张并左移, 但不补牌(右侧空位保持空)
+        return state
     return _refill(state, db)
 
 
@@ -166,7 +169,11 @@ def _end_current_age(state: GameState, db: CardDB) -> GameState:
 
 
 def _end_age(state: GameState, db: CardDB) -> GameState:
-    """时代 A/I/II 结束: 余牌移除 -> 过期处理 -> 每人 -2 黄点 -> 启用新牌堆."""
+    """时代 A/I/II 结束: 余牌移除 -> 过期处理 -> 启用新牌堆.
+
+    官方规则: 每人 -2 黄点仅在时代 I/II/III 结束时执行; 时代 A 结束
+    "nothing else happens"(无过期, 也无黄点损失)。
+    """
     ended = state.age
     new_age = ended.next()
     if new_age is None:  # pragma: no cover - III 由 _enter_age_four 处理
@@ -196,9 +203,11 @@ def _end_age(state: GameState, db: CardDB) -> GameState:
                 removed += (wonder_id,)
                 p = replace(p, blue_bank=p.blue_bank + stages_done,
                             wonder_progress=None)
-        # 每人 -2 黄点(下限 0)
-        players.append(replace(
-            p, yellow_bank=max(0, p.yellow_bank - AGE_END_YELLOW_LOSS)))
+        # 每人 -2 黄点(下限 0); 时代 A 结束不执行
+        if ended is not Age.A:
+            p = replace(
+                p, yellow_bank=max(0, p.yellow_bank - AGE_END_YELLOW_LOSS))
+        players.append(p)
     future = dict(state.future_decks)
     new_deck = future.pop(new_age.value, ())
     return replace(

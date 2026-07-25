@@ -209,7 +209,8 @@ def test_two_players_discard_three_slide_and_refill() -> None:
 
 def test_age_a_ends_at_first_refill() -> None:
     # 起始玩家第二回合开始: 弃 3 -> 左移 -> A 堆补 3 空位 -> A 堆余牌入
-    # removed -> 启用 I 堆; 无过期, 但每人 -2 黄点
+    # removed -> 启用 I 堆; 官方规则: 时代 A 结束 nothing else happens,
+    # 无过期, 也不扣黄点(yellow_bank 不变)
     state = _state(
         round=1,
         age=Age.A,
@@ -226,7 +227,7 @@ def test_age_a_ends_at_first_refill() -> None:
     assert new.removed == ("xa0", "xa1", "xa2", "xa16", "xa17")
     assert new.civil_deck == ("xi0", "xi1", "xi2")
     assert new.future_decks == {}
-    assert [p.yellow_bank for p in new.players] == [16, 16]
+    assert [p.yellow_bank for p in new.players] == [18, 18]
 
 
 def test_age_a_end_deck_exhausted_continues_with_age_i() -> None:
@@ -329,13 +330,12 @@ def test_age_iv_opened_at_start_player_turn_makes_this_round_last() -> None:
     assert new.current_player == 0
     assert new.civil_deck == ()
     assert new.terminal is False
-    # 时代 IV 的回合开始: 不弃牌不补牌
-    row_after = new.card_row
+    # 时代 IV 的回合开始: 仍弃最左 N 张并左移(仅剩 1 张被弃), 但不补牌
     new = turn.advance(new, _db())
     assert new.terminal is False
     assert new.round == 4
     assert new.current_player == 1
-    assert new.card_row == row_after
+    assert new.card_row == (None,) * ROW_SLOTS
     # 最后一轮结束 -> 终局, final_scores = 各玩家文化
     new = turn.advance(new, _db())
     assert new.terminal is True
@@ -362,6 +362,28 @@ def test_age_iv_opened_at_other_player_turn_makes_next_round_last() -> None:
     new = turn.advance(new, _db())
     assert new.terminal is True
     assert new.final_scores == (5, 7)
+
+
+def test_age_four_discards_left_cards_but_never_refills() -> None:
+    # 时代 IV 无牌堆: 回合开始仍弃最左 N 张并左移, 右侧空位保持空,
+    # 卡牌列逐回合缩短
+    row = ("xiii5", "xiii6", "xiii7", "xiii8") + (None,) * (ROW_SLOTS - 4)
+    state = _state(
+        round=3,
+        age=Age.IV,
+        current_player=0,
+        card_row=row,
+        civil_deck=(),
+    )
+    new = turn.advance(state, _db())
+    # 2 人局弃最左 3 个位置的牌入 removed, 其余左移, 不补牌
+    assert new.removed == ("xiii5", "xiii6", "xiii7")
+    assert new.card_row == ("xiii8",) + (None,) * (ROW_SLOTS - 1)
+    assert new.civil_deck == ()
+    # 下一回合开始: 再弃 3 个位置(仅剩 xiii8), 牌列清空
+    new = turn.advance(new, _db())
+    assert new.removed == ("xiii5", "xiii6", "xiii7", "xiii8")
+    assert new.card_row == (None,) * ROW_SLOTS
 
 
 # --- PassTurn 接入 ---------------------------------------------------------
