@@ -45,7 +45,7 @@ import pytest
 
 from tta.cards import build_card_db
 from tta.engine import politics
-from tta.engine.actions import DevelopTech, SeedEvent
+from tta.engine.actions import DevelopTech, Resign, SeedEvent
 from tta.engine.apply import apply
 from tta.engine.enums import Age, DeckType
 from tta.engine.legal import legal_actions
@@ -115,14 +115,17 @@ def _accounted(state: GameState) -> Counter:
     accounted.update(state.current_events)
     accounted.update(state.future_events)
     accounted.update(state.past_events)
-    # 响应中的在途牌: 侵略揭示卡(aggression_defense pending context)与
-    # 竞拍/牺牲中的地区牌(colonize pending context)暂不在任何牌域
+    # 响应中的在途牌: 侵略揭示卡(aggression_defense pending context)、
+    # 竞拍/牺牲中的地区牌(colonize pending context)与展示中的条约牌
+    # (pact_offer pending context)暂不在任何牌域
     for e in state.pending:
         if e.kind == politics.KIND_AGGRESSION_DEFENSE:
             accounted.update([str(e.context["card"])])
         elif e.kind in (politics.KIND_COLONIZE_BID,
                         politics.KIND_COLONIZE_SACRIFICE):
             accounted.update([str(e.context["territory"])])
+        elif e.kind == politics.KIND_PACT_OFFER:
+            accounted.update([str(e.context["card"])])
     for p in state.players:
         accounted.update(p.hand_civil)
         accounted.update(p.hand_military)
@@ -139,6 +142,9 @@ def _accounted(state: GameState) -> Counter:
         # 在途战争牌(DeclareWar 手牌 -> declared_wars, 次回合结算后入
         # 军事弃牌堆; 与 T8 侵略在途口径一致)
         accounted.update(card_id for card_id, _ in p.declared_wars)
+        # 生效中的条约牌(游戏区域, 缔约双方各录 (卡 id, 侧), 只计一次)
+        accounted.update(
+            card_id for card_id, side in p.pacts if side == "A")
     return accounted
 
 
@@ -201,7 +207,10 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
     steps = 0
     while not state.terminal:
         legal = legal_actions(db, state)
-        action = rng.choice(legal)
+        # 驱动不主动体面退出(Resign 恒合法, 随机选取会提前终局, 丧失中后段
+        # 不变量覆盖; 退出机制由 tests/engine/test_pacts.py 专项覆盖)
+        choices = [a for a in legal if not isinstance(a, Resign)]
+        action = rng.choice(choices or legal)
         if isinstance(action, DevelopTech) and action.card_id in BLUE_GAIN_CARDS:
             # 研发 justice_system/civil_service 各从盒中 +3 蓝点(含
             # breakthrough pending 子行动; 替换移除不影响已得蓝点)
@@ -253,7 +262,16 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
                 f"seed {seed} step {steps} 序列化往返失败"
             )
     assert state.final_scores is not None
-    assert state.final_scores == tuple(p.culture for p in state.players)
+    if any(p.resigned for p in state.players):
+        # 体面退出判胜(规则书 p4: 只剩 1 人直接获胜, 不比文化):
+        # 唯一未退出者 final_scores 严格最高
+        winner = max(range(len(state.players)),
+                     key=lambda i: state.final_scores[i])
+        assert not state.players[winner].resigned
+        assert all(
+            p.resigned for i, p in enumerate(state.players) if i != winner)
+    else:
+        assert state.final_scores == tuple(p.culture for p in state.players)
     return state
 
 
@@ -272,7 +290,8 @@ def test_state_hash_chain_deterministic(db) -> None:
         run_hashes = [state_hash(state)]
         while not state.terminal:
             legal = legal_actions(db, state)
-            state = apply(state, rng.choice(legal), db)
+            choices = [a for a in legal if not isinstance(a, Resign)]
+            state = apply(state, rng.choice(choices or legal), db)
             run_hashes.append(state_hash(state))
         hashes.append(run_hashes)
     assert len(hashes[0]) == len(hashes[1])

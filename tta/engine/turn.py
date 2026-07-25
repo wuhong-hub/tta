@@ -22,10 +22,10 @@ advance(state, db) 流程:
    等待发生在整个回合末流程之后(响应者会看到抓牌结果, 弃牌候选含新抓
    的牌)。引擎未做到逐步等待, 但保证了弃牌决策先于推进/下一位回合开始
    (消除时代切换错位与回合开始信息泄漏)。
-2. 推进(proceed): nxt = (current+1) % 人数; nxt == 0 时: last_round ->
-   终局(terminal, final_scores = 各玩家文化, 事件计分 P2); 否则
-   round += 1, 且 age 已为 IV 时 last_round = True(非起始玩家回合开启
-   IV -> 下一轮为最后一轮)。
+2. 推进(proceed): 下一位未退出座位(体面退出者跳过, P2-T10); 回绕座位
+   序列时: last_round -> 终局(terminal, final_scores = 各玩家文化, 事件
+   计分 P2); 否则 round += 1, 且 age 已为 IV 时 last_round = True(非起始
+   玩家回合开启 IV -> 下一轮为最后一轮)。
 3. 回合开始(nxt 玩家): round == 1 -> 全部跳过; 否则弃最左
    N(2/3/4 人 -> 3/2/1)个位置的牌入 removed -> 左移紧凑 -> 补牌
    -> 结算战争(规则书 p3 回合流程: 补充卡牌列 -> 结算战争 -> 公开
@@ -103,9 +103,15 @@ def proceed(state: GameState, db: CardDB) -> GameState:
 
     仅供 advance(无弃牌 pending)与 apply._discard_military(弃牌 pending
     结算完)调用; 不重复执行回合末阶段的任何内容。
+    体面退出者(P2-T10)座位跳过; 越过座位序列末端(回绕)才递增 round。
     """
-    nxt = (state.current_player + 1) % len(state.players)
-    if nxt == 0:
+    nxt = state.current_player
+    for _ in range(len(state.players)):
+        nxt = (nxt + 1) % len(state.players)
+        if not state.players[nxt].resigned:
+            break
+    if nxt <= state.current_player:
+        # 回绕到座位序列前段 -> 新一轮(无退出者时等价于 nxt == 0)
         if state.last_round:
             # 最后一轮已完整打完 -> 终局(P1 无事件, 仅文化计分)
             return replace(
@@ -133,7 +139,10 @@ def proceed(state: GameState, db: CardDB) -> GameState:
 def end_of_turn(state: GameState, db: CardDB) -> GameState:
     idx = state.current_player
     p = state.players[idx]
-    values = civ.civ_values(db, p)
+    if p.resigned:
+        # 体面退出者(P2-T10): 文明已移除, 无回合末阶段(仅 PassTurn 推进)
+        return state
+    values = civ.civ_values(db, p, state.players, idx)
     # a. 弃多余军事牌: 手牌 > civ 军事行动点 + military_hand_extra ->
     # discard_military pending(responder = 刚结束回合的玩家; 官方回合结束
     # 阶段顺序: 弃置多余的军事牌 -> 起义检定 -> 生产 -> 抓取军事牌。
@@ -147,7 +156,7 @@ def end_of_turn(state: GameState, db: CardDB) -> GameState:
             effects.KIND_DISCARD_MILITARY, 0,
             responder=idx, context={"count": excess}),))
     # b. 起义检定: 起义则跳过整个生产阶段
-    if not civ.is_uprising(db, p):
+    if not civ.is_uprising(db, p, state.players, idx):
         p = _production(db, p, values)
     # d. 抓军事牌: min(剩余红点, 3); 时代 IV 不抓
     state, p = _draw_military(state, p)
@@ -201,7 +210,11 @@ def _production(db: CardDB, p: PlayerState, values: civ.CivValues) -> PlayerStat
             p = replace(p, culture=max(
                 0, p.culture - FOOD_SHORTAGE_CULTURE_PENALTY * missing))
     # 资源生产
-    return economy.produce(db, p, "resource")
+    p = economy.produce(db, p, "resource")
+    # 国际贸易协议 A 侧(P2-T10): 每回合 +1 资源生产(卡牌数值表 p3)
+    if ("international_trade_agreement", "A") in p.pacts:
+        p = economy.gain_tokens(db, p, "resource", 1)
+    return p
 
 
 # --- 回合开始阶段 -----------------------------------------------------------

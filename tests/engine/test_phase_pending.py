@@ -13,6 +13,7 @@ from tta.engine.actions import (
     DeclineResponse,
     IllegalActionError,
     PassTurn,
+    Resign,
     SkipPolitics,
     TakeCard,
     action_from_dict,
@@ -144,7 +145,7 @@ def test_player_military_fields_serialization_roundtrip() -> None:
         tactics_this_turn=True,
         colonies=("territory_x",),
         declared_wars=(("war_y", 1),),
-        pacts=("pact_z",),
+        pacts=(("pact_z", "A"),),
         caesar_used=True,
     )
     state = _state(players=(p, _player("P1")))
@@ -209,8 +210,9 @@ def test_advance_round_two_enters_politics_phase() -> None:
 
 
 def test_politics_phase_legal_is_only_skip_politics() -> None:
+    # 无军事手牌时政治动作仅剩 Resign(时代 IV 外恒可退出, P2-T10)
     state = _state(phase=Phase.POLITICS)
-    assert legal_actions(_db(), state) == [SkipPolitics()]
+    assert legal_actions(_db(), state) == [Resign(), SkipPolitics()]
     with pytest.raises(IllegalActionError):
         apply(state, PassTurn(), _db())
 

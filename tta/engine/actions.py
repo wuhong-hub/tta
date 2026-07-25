@@ -149,22 +149,37 @@ class DeclareWar:
 
 @dataclass(frozen=True)
 class ProposePact:
-    """提议条约(类型与序列化 P2-T5; 结算 T10)."""
+    """提议条约(政治行动, 3-4 人; 结算见 politics.propose_pact): 展示条约牌,
+    宣告目标与自己扮演的侧(side: "A"/"B", 对称条约恒 "A"), 压 pact_offer
+    pending 由对方接受/拒绝(规则书 p4 提出条约)。"""
 
     card_id: str
     target: int
+    side: str = "A"
+
+
+@dataclass(frozen=True)
+class PactAccept:
+    """接受条约提议(pact_offer pending 响应): 双方既有条约失效, 新条约生效."""
+
+
+@dataclass(frozen=True)
+class PactReject:
+    """拒绝条约提议(pact_offer pending 响应): 牌回提出者手, 其本回合政治结束."""
 
 
 @dataclass(frozen=True)
 class CancelPact:
-    """退出条约(类型与序列化 P2-T5; 结算 T10)."""
+    """退出条约(政治行动, 3-4 人; 结算见 politics.cancel_pact): 将你为当事人
+    的一项条约从游戏中移除(规则书 p4 取缔条约)。"""
 
     card_id: str
 
 
 @dataclass(frozen=True)
 class Resign:
-    """退出(殖民竞拍等场景; 类型与序列化 P2-T5, 结算 T7 等后续任务)."""
+    """体面退出(政治行动, 时代 IV 不可用; 结算见 politics.resign): 文明退出
+    游戏, 只剩 1 人时其直接判胜(规则书 p4 体面退出)。"""
 
 
 @dataclass(frozen=True)
@@ -247,7 +262,8 @@ Action = (
     | IncreasePopulation | SkipPolitics | DiscardMilitary
     | PlayTactics | CopyTactics | PassTurn
     | DeclineResponse | SeedEvent | PlayAggression | DeclareWar
-    | ProposePact | CancelPact | Resign | ChooseEventOption
+    | ProposePact | PactAccept | PactReject | CancelPact | Resign
+    | ChooseEventOption
     | ColonizeBid | ColonizePass | ColonizePlayBonus | ColonizeSacrifice
     | PlayDefenseBonus | DiscardForStrength | PassResponse
 )
@@ -274,6 +290,8 @@ _ACTION_TYPES: dict[str, type] = {
     "play_aggression": PlayAggression,
     "declare_war": DeclareWar,
     "propose_pact": ProposePact,
+    "pact_accept": PactAccept,
+    "pact_reject": PactReject,
     "cancel_pact": CancelPact,
     "resign": Resign,
     "choose_event_option": ChooseEventOption,

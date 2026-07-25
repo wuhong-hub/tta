@@ -43,6 +43,7 @@ from tta.engine.state import (
     PendingEffect,
     PlayerState,
     acting_index,
+    active_indices,
     replace_player,
 )
 
@@ -233,9 +234,12 @@ def parse_mix(option: str) -> tuple[tuple[str, int], ...]:
 
 
 def _seat_order(state: GameState) -> list[int]:
-    """从 current_player 起顺时针的座位序."""
+    """从 current_player 起顺时针的座位序(不含已体面退出者)."""
     n = len(state.players)
-    return [(state.current_player + i) % n for i in range(n)]
+    return [
+        (state.current_player + i) % n for i in range(n)
+        if not state.players[(state.current_player + i) % n].resigned
+    ]
 
 
 def _push_chain(state: GameState, kind: str, seats: list[int]) -> GameState:
@@ -271,6 +275,8 @@ def _gain_tokens_all(
     db: CardDB, state: GameState, kind: str, count: int,
 ) -> GameState:
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         state = replace_player(state, i, economy.gain_tokens(db, p, kind, count))
     return state
 
@@ -310,6 +316,8 @@ def _development_of_religion(state: GameState, db: CardDB) -> GameState:
 def _development_of_science(state: GameState, db: CardDB) -> GameState:
     """每个文明 +2 科技."""
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         state = replace_player(state, i, replace(p, science=p.science + 2))
     return state
 
@@ -317,6 +325,8 @@ def _development_of_science(state: GameState, db: CardDB) -> GameState:
 def _development_of_settlement(state: GameState, db: CardDB) -> GameState:
     """每个文明免费 +1 人口(yellow_bank > 0 才生效; 不付食物费)."""
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         if p.yellow_bank > 0:
             state = replace_player(state, i, replace(
                 p, yellow_bank=p.yellow_bank - 1,
@@ -327,6 +337,8 @@ def _development_of_settlement(state: GameState, db: CardDB) -> GameState:
 def _development_of_trade_route(state: GameState, db: CardDB) -> GameState:
     """每个文明 +1 科技、+1 食物、+1 资源."""
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         p = replace(p, science=p.science + 1)
         p = economy.gain_tokens(db, p, "food", 1)
         p = economy.gain_tokens(db, p, "resource", 1)
@@ -368,8 +380,9 @@ def _extreme_seats(
 
     返回按"最值程度"排序的座位列表(同一事件同时引用最强与最弱且全场平局
     时, 两侧可判给同一座位 — 规则书 p7 平局口径的字面结果)。
+    已体面退出者(resigned)不参与比较(规则书 p4: 其文明移出游戏)。
     """
-    seats = range(len(state.players))
+    seats = active_indices(state)
 
     def key(seat: int) -> tuple[int, int]:
         primary = -values[seat] if strongest else values[seat]
@@ -379,13 +392,19 @@ def _extreme_seats(
 
 
 def _most_count(state: GameState) -> int:
-    """"两个最X"的数量: 2 人局理解为"一个最X"(规则书 p7), 否则 2."""
-    return 1 if len(state.players) == 2 else 2
+    """"两个最X"的数量: 2 人局理解为"一个最X"(规则书 p7), 否则 2.
+
+    按在局(未退出)人数计(规则书 p4: 只剩 2 位玩家时按 2 人规则结算事件)。
+    """
+    return 1 if len(active_indices(state)) == 2 else 2
 
 
 def _strengths(db: CardDB, state: GameState) -> list[int]:
-    """各玩家 civ 军力(最强/最弱文明的比较口径)."""
-    return [civ_values(db, p).strength for p in state.players]
+    """各玩家 civ 军力(最强/最弱文明的比较口径; 含条约静态加成)."""
+    return [
+        civ_values(db, p, state.players, i).strength
+        for i, p in enumerate(state.players)
+    ]
 
 
 def _weakest_seats(db: CardDB, state: GameState) -> list[int]:
@@ -488,7 +507,9 @@ def _crusades(state: GameState, db: CardDB) -> GameState:
 def _cultural_influence(state: GameState, db: CardDB) -> GameState:
     """每个文明 +文化, 等于其文化增速."""
     for i, p in enumerate(state.players):
-        rate = civ_values(db, p).culture_rate
+        if p.resigned:
+            continue
+        rate = civ_values(db, p, state.players, i).culture_rate
         if rate:
             state = replace_player(state, i, replace(p, culture=p.culture + rate))
     return state
@@ -503,15 +524,22 @@ def _foray(state: GameState, db: CardDB) -> GameState:
 def _good_harvest(state: GameState, db: CardDB) -> GameState:
     """每名玩家农场立即生产(事件即时结算, 天然无消耗与腐败)."""
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         state = replace_player(state, i, economy.produce(db, p, "food"))
     return state
 
 
 def _immigration(state: GameState, db: CardDB) -> GameState:
     """笑脸最多的所有文明(平局全部)免费 +1 人口(黄点银行非空才生效)."""
-    happiness = [civ_values(db, p).happiness for p in state.players]
+    happiness = [
+        civ_values(db, p, state.players, i).happiness
+        for i, p in enumerate(state.players)
+    ]
     best = max(happiness)
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         if happiness[i] == best and p.yellow_bank > 0:
             state = replace_player(state, i, replace(
                 p, yellow_bank=p.yellow_bank - 1,
@@ -522,6 +550,8 @@ def _immigration(state: GameState, db: CardDB) -> GameState:
 def _new_deposits(state: GameState, db: CardDB) -> GameState:
     """每名玩家矿场立即生产(忽略腐败)."""
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         state = replace_player(state, i, economy.produce(db, p, "resource"))
     return state
 
@@ -529,6 +559,8 @@ def _new_deposits(state: GameState, db: CardDB) -> GameState:
 def _pestilence(state: GameState, db: CardDB) -> GameState:
     """每个文明 -1 人口."""
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         state = replace_player(state, i, lose_population(p, 1))
     return state
 
@@ -546,6 +578,8 @@ def _raiders(state: GameState, db: CardDB) -> GameState:
 def _rats(state: GameState, db: CardDB) -> GameState:
     """每个文明失去所有储存的食物(农场卡上蓝点全清回供给区)."""
     for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
         farm_tokens = sum(
             n for card_id, n in p.card_tokens.items()
             if n > 0 and db.get(card_id).category is CardCategory.FARM
@@ -571,6 +605,9 @@ def _rebellion(state: GameState, db: CardDB) -> GameState:
     idx = state.current_player
     players: list[PlayerState] = []
     for i, p in enumerate(state.players):
+        if p.resigned:
+            players.append(p)
+            continue
         if i == idx:
             p = replace(
                 p, civil_action_debt=p.civil_action_debt + REBELLION_CIVIL_LOSS)
@@ -591,7 +628,9 @@ def _reign_of_terror(state: GameState, db: CardDB) -> GameState:
 def _scientific_breakthrough(state: GameState, db: CardDB) -> GameState:
     """每个文明 +科技, 等于其科技增速."""
     for i, p in enumerate(state.players):
-        rate = civ_values(db, p).science_rate
+        if p.resigned:
+            continue
+        rate = civ_values(db, p, state.players, i).science_rate
         if rate:
             state = replace_player(state, i, replace(p, science=p.science + rate))
     return state

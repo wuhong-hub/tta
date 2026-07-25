@@ -268,7 +268,7 @@ def _alexander_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
 
 
 def _julius_caesar_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
-    """julius_caesar: +1 军力 +1 军事行动(双政治行动 P2-DEFERRED)."""
+    """julius_caesar: +1 军力 +1 军事行动(双政治一次性见 politics P2-T10)."""
     return {"strength": 1, "military_actions": 1}
 
 
@@ -867,11 +867,12 @@ def _make_stronger_civs_discount_handler(
     ) -> GameState:
         from tta.engine.civ import civ_values
         p = state.players[player_index]
-        mine = civ_values(db, p).strength
+        mine = civ_values(db, p, state.players, player_index).strength
         stronger = sum(
             1
             for i, other in enumerate(state.players)
-            if i != player_index and civ_values(db, other).strength > mine
+            if i != player_index and not other.resigned
+            and civ_values(db, other, state.players, i).strength > mine
         )
         if not stronger:
             return state

@@ -19,6 +19,7 @@ from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
+    CancelPact,
     ChooseEventOption,
     ColonizeBid,
     ColonizePass,
@@ -35,6 +36,8 @@ from tta.engine.actions import (
     DiscardMilitary,
     IllegalActionError,
     IncreasePopulation,
+    PactAccept,
+    PactReject,
     PassResponse,
     PassTurn,
     PlayActionCard,
@@ -42,6 +45,8 @@ from tta.engine.actions import (
     PlayDefenseBonus,
     PlayLeader,
     PlayTactics,
+    ProposePact,
+    Resign,
     SeedEvent,
     SkipPolitics,
     TakeCard,
@@ -84,6 +89,16 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return politics.play_aggression(db, state, action)
     if isinstance(action, DeclareWar):
         return politics.declare_war(db, state, action)
+    if isinstance(action, ProposePact):
+        return politics.propose_pact(db, state, action)
+    if isinstance(action, PactAccept):
+        return politics.pact_accept(db, state)
+    if isinstance(action, PactReject):
+        return politics.pact_reject(db, state)
+    if isinstance(action, CancelPact):
+        return politics.cancel_pact(db, state, action)
+    if isinstance(action, Resign):
+        return politics.resign(db, state)
     if isinstance(action, PlayDefenseBonus):
         return politics.play_defense_bonus(db, state, action)
     if isinstance(action, DiscardForStrength):

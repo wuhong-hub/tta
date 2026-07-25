@@ -51,6 +51,8 @@ from tta.engine.actions import (
     DiscardForStrength,
     DiscardMilitary,
     IncreasePopulation,
+    PactAccept,
+    PactReject,
     PassResponse,
     PassTurn,
     PlayActionCard,
@@ -413,6 +415,9 @@ def _pending_actions(
         # 快照入 context, 与 war_seize_options 同口径; 放弃由白名单兜底)
         return [ChooseEventOption(card_id)
                 for card_id in str(pending.context["options"]).split(",")]
+    if pending.kind == politics.KIND_PACT_OFFER:
+        # 条约提议: 对方接受或拒绝(恒可响应, 不可放弃)
+        return [PactAccept(), PactReject()]
     return []
 
 
@@ -609,6 +614,9 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
             # responder(防止一次 PassTurn 丢弃他玩家的事件选择 pending)
             actions.append(PassTurn())
         return actions
+    if state.players[state.current_player].resigned:
+        # 体面退出者回合: 文明已移除, 仅剩 PassTurn 推进轮换
+        return [PassTurn()]
     if state.phase is Phase.POLITICS:
         # 政治阶段: 政治动作(每回合限 1, 见 politics.py) + SkipPolitics
         politics_moves: list[Action] = politics.politics_actions(db, state)

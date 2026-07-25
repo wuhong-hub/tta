@@ -14,6 +14,7 @@ from tta.engine.actions import (
     DiscardMilitary,
     IllegalActionError,
     PassTurn,
+    Resign,
     SkipPolitics,
     action_from_dict,
     action_to_dict,
@@ -333,7 +334,8 @@ def test_discard_excess_pending_flow() -> None:
     assert new.removed == ("xi0", "xi1", "xi2")
     assert new.card_row == tuple(f"xi{i}" for i in range(3, 16))
     assert new.civil_deck == ("xi16", "xi17", "xi18", "xi19")
-    assert legal_actions(db, new) == [SkipPolitics()]
+    # 政治阶段: 无军事手牌可打出时仅剩 Resign(时代 IV 外恒可退出, P2-T10)
+    assert legal_actions(db, new) == [Resign(), SkipPolitics()]
 
 
 def test_discard_military_not_in_hand_illegal() -> None:

@@ -174,10 +174,10 @@ def test_gandhi_owner_cannot_play_aggression() -> None:
 
 
 def test_peace_pact_blocks_aggression() -> None:
-    # 停战类条约(和平条约等)生效中不可互相攻击(T10 建模: 双方 pacts 同录)
+    # 停战类条约(和平条约等)生效中不可互相攻击(双方 pacts 同录 (卡 id, 侧))
     db = build_card_db()
-    p0 = _aggressor(pacts=("peace_treaty",))
-    p1 = _player("P1", pacts=("peace_treaty",))
+    p0 = _aggressor(pacts=(("peace_treaty", "A"),))
+    p1 = _player("P1", pacts=(("peace_treaty", "B"),))
     state = _state(players=(p0, p1))
     assert not any(
         isinstance(a, PlayAggression) for a in legal_actions(db, state))

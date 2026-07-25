@@ -68,8 +68,10 @@ class PlayerState:
     colonies: tuple[str, ...] = ()
     # 已宣告待结算的战争牌: (卡 id, 目标座位); 宣告者下个回合开始阶段结算
     declared_wars: tuple[tuple[str, int], ...] = ()
-    pacts: tuple[str, ...] = ()              # 生效中的条约(卡 id, 3-4 人)
+    # 生效中的条约: (卡 id, 本方侧 "A"/"B"), 缔约双方各录一条(3-4 人)
+    pacts: tuple[tuple[str, str], ...] = ()
     caesar_used: bool = False                # Julius Caesar 双政治一次性
+    resigned: bool = False                   # 已体面退出(文明移除, 轮换跳过)
     civil_action_debt: int = 0               # 下回合白点扣减(rebellion 事件;
                                              # 回合末行动点恢复时生效并清零)
 
@@ -118,6 +120,11 @@ def acting_index(state: GameState) -> int:
     if state.pending and state.pending[0].responder is not None:
         return state.pending[0].responder
     return state.current_player
+
+
+def active_indices(state: GameState) -> list[int]:
+    """未体面退出的玩家座位(事件比较与条约目标等的在局口径)."""
+    return [i for i, p in enumerate(state.players) if not p.resigned]
 
 
 def replace_player(state: GameState, index: int, player: PlayerState) -> GameState:
@@ -175,9 +182,12 @@ def _player_to_dict(p: PlayerState) -> dict:
         "tactics_copied": p.tactics_copied,
         "colonies": list(p.colonies),
         "declared_wars": [list(w) for w in p.declared_wars],
-        "pacts": list(p.pacts),
+        "pacts": [list(e) for e in p.pacts],
         "caesar_used": p.caesar_used,
     }
+    if p.resigned:
+        # 体面退出标记; 非 True 不落盘(旧格式逐字节兼容)
+        data["resigned"] = True
     if p.civil_action_debt:
         # rebellion 下回合白点扣减; 非 0 才落盘(旧格式逐字节兼容)
         data["civil_action_debt"] = p.civil_action_debt
@@ -216,8 +226,12 @@ def _player_from_dict(d: dict) -> PlayerState:
         declared_wars=tuple(
             (str(w[0]), int(w[1])) if isinstance(w, (list, tuple)) else (str(w), -1)
             for w in d.get("declared_wars", ())),
-        pacts=tuple(d.get("pacts", ())),
+        # (卡 id, 侧) 元组; 兼容旧格式纯卡 id 字符串(侧落 "A")
+        pacts=tuple(
+            (str(e[0]), str(e[1])) if isinstance(e, (list, tuple)) else (str(e), "A")
+            for e in d.get("pacts", ())),
         caesar_used=d.get("caesar_used", False),
+        resigned=d.get("resigned", False),
         civil_action_debt=d.get("civil_action_debt", 0),
     )
 

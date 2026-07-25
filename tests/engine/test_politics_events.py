@@ -120,13 +120,14 @@ def test_new_actions_serialization_roundtrip() -> None:
 
 
 def test_t8_t9_t10_actions_not_yet_legal() -> None:
-    # 侵略/战争/条约/退出类型已建, 结算在 T8/T9/T10, 当前不合法
+    # 侵略/战争/条约需手牌支撑, 空手时不可打出; 2 人局无条约动作(T10);
+    # Resign 无需手牌(时代 IV 外恒合法, P2-T10 起合法, 见 test_pacts.py)
     db = build_card_db()
     state = _state()
     legal = legal_actions(db, state)
     for action in (
         PlayAggression("raid_i", 1), DeclareWar("war_over_culture_iii", 1),
-        ProposePact("peace_treaty", 1), CancelPact("peace_treaty"), Resign(),
+        ProposePact("peace_treaty", 1), CancelPact("peace_treaty"),
     ):
         assert action not in legal
         with pytest.raises(IllegalActionError):
@@ -152,10 +153,11 @@ def test_politics_legal_seed_event_plus_skip() -> None:
 
 
 def test_politics_legal_without_event_cards_is_only_skip() -> None:
+    # 无可打出军事牌时, 政治动作仅剩 Resign(时代 IV 外恒可退出, P2-T10)
     db = build_card_db()
     p0 = _player("P0", hand_military=("fighting_band",))
     state = _state(players=(p0, _player("P1")))
-    assert legal_actions(db, state) == [SkipPolitics()]
+    assert legal_actions(db, state) == [Resign(), SkipPolitics()]
 
 
 def test_politics_action_limited_to_one_per_turn() -> None:

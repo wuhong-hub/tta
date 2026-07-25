@@ -59,6 +59,35 @@ SeedEvent 结算(规则书 p4/p7):
   提供标记; 负值下限 0), 再结算即时效果(science/culture/food/materials
   按价值/population 免费人口/military_card 抽军事牌忽略手牌上限);
   永久效果(除黄/蓝标记)接入 civ.py 合成。
+
+条约、体面退出与 Caesar 双政治(规则书 p4, P2-T10):
+- ProposePact(card_id, target, side)(3-4 人; 2 人局不生成): 展示条约牌
+  (离手), 压 pact_offer pending(responder=target, context={card,
+  proposer, side}); side 为提出者自己扮演的侧("A"/"B"), 对称条约仅举 "A"
+  (两侧效果相同, 减动作空间)。
+- PactAccept/PactReject: 拒绝 -> 牌回提出者手, 其本回合不能再执行政治行动
+  (phase -> ACTION, Caesar 不覆盖, 规则书 p4 明示); 接受 -> 双方既有条约
+  立即失效(入 removed, "无论是与对方还是与其他玩家缔结的"), 双方 pacts
+  各追加 (卡 id, 本方侧), 静态/被动效果经 civ.pact_bonuses 合成。
+- 条约效果(卡牌数值表 p3): 静态类入 civ.PACT_STATIC_BONUSES(停战类同时
+  入 ATTACK_BLOCKING_PACTS); 开放边境"攻击者 +2 军力"于攻击快照时加成
+  (OPEN_BORDERS_ATTACK_BONUS); 军事同盟/军事保护承诺"若一方攻击另一方,
+  条约终止"于 PlayAggression/DeclareWar 时先移除再快照
+  (ATTACK_ENDING_PACTS); 主权丧失"无人能对 B 宣战"于 _war_actions 豁免;
+  国际贸易协议 A 侧 +1 资源生产于 turn 回合末生产钩子; trade_routes
+  (每回合食物/资源置换)与 scientific_cooperation(每回合研发折扣)为
+  每回合选择类互动, P3-DEFERRED(可缔约但无效果, 卡 text 保留完整描述)。
+- CancelPact(card_id)(3-4 人): 你为当事人的一项条约从双方 pacts 移除,
+  卡入 removed, 效果终止。
+- Resign(时代 IV 不可用): 手牌入弃牌堆, 游戏区域卡牌入 removed(进行中
+  奇迹已付阶段蓝点退回供给区); 与其有关的条约双方移除; 对其宣战者的
+  战争牌入 removed 且宣战者 +7 文化; 黄/蓝标记与工人随文明退出冻结保留
+  (守恒口径, 不再参与游戏)。只剩 1 人 -> 游戏立即结束, 该玩家直接判胜
+  (不比文化, final_scores 其严格最高); 仍有 >=2 人继续, 轮换跳过其座位
+  (turn.proceed), 事件比较与目标枚举排除已退出者(state.active_indices)。
+- Julius Caesar: 领袖在场且 caesar_used=False 时, 政治动作结算后
+  (seed_event/侵略判定/宣战/条约接受/取缔)phase 回 POLITICS 而非 ACTION
+  并置 caesar_used=True(一次性); 第二次政治动作后 -> ACTION。
 """
 
 from collections.abc import Callable
@@ -67,6 +96,7 @@ from dataclasses import replace
 from tta.engine import economy, effects, events, military
 from tta.engine.actions import (
     Action,
+    CancelPact,
     ColonizeBid,
     ColonizePass,
     ColonizePlayBonus,
@@ -76,6 +106,8 @@ from tta.engine.actions import (
     IllegalActionError,
     PlayAggression,
     PlayDefenseBonus,
+    ProposePact,
+    Resign,
     SeedEvent,
 )
 from tta.engine.civ import civ_values
@@ -93,6 +125,7 @@ from tta.engine.state import (
     PendingEffect,
     PlayerState,
     acting_index,
+    active_indices,
     replace_player,
 )
 
@@ -113,11 +146,11 @@ _COLONY_TOKEN_KEYS = ("yellow_token", "blue_token")
 def politics_actions(db: CardDB, state: GameState) -> list[Action]:
     """POLITICS 相位可用政治动作(不含 SkipPolitics, 由 legal 追加).
 
-    当前为 SeedEvent(军事手牌中的 EVENT 卡) + PlayAggression(军事手牌中
-    的 AGGRESSION 卡 × 合法目标) + DeclareWar(军事手牌中的 WAR 卡 × 合法
-    目标); 条约动作 T10 加入。
+    SeedEvent(军事手牌中的 EVENT 卡) + PlayAggression(军事手牌中的
+    AGGRESSION 卡 × 合法目标) + DeclareWar(军事手牌中的 WAR 卡 × 合法
+    目标) + ProposePact/CancelPact(3-4 人, 条约) + Resign(时代 IV 外)。
     RULES-CHECK(规则书 p4 未禁止): 时代 IV 无军事牌可抽, 但手牌中已有的
-    事件牌仍可筹划、侵略牌仍可打出。
+    事件牌仍可筹划、侵略牌仍可打出; 条约动作同理(仅 Resign 明示 IV 禁用)。
     """
     idx = state.current_player
     p = state.players[idx]
@@ -128,6 +161,10 @@ def politics_actions(db: CardDB, state: GameState) -> list[Action]:
     ]
     actions.extend(_aggression_actions(db, state, idx, p))
     actions.extend(_war_actions(db, state, idx, p))
+    actions.extend(_pact_actions(db, state, idx, p))
+    if state.age is not Age.IV:
+        # 规则书 p4: 你不能在时代 IV 退出游戏
+        actions.append(Resign())
     return actions
 
 
@@ -138,7 +175,7 @@ def _aggression_actions(
     if p.leader == effects.LEADER_GANDHI:
         # 甘地卡文本: 你不能打出侵略或战争牌
         return []
-    attacker_strength = civ_values(db, p).strength
+    attacker_strength = civ_values(db, p, state.players, idx).strength
     actions: list[PlayAggression] = []
     for card_id in dict.fromkeys(p.hand_military):
         card = db.get(card_id)
@@ -148,12 +185,12 @@ def _aggression_actions(
         if card.handler not in AGGRESSION_HANDLERS:
             continue
         for target, tp in enumerate(state.players):
-            if target == idx:
+            if target == idx or tp.resigned:
                 continue
             if _pact_blocks_attack(p, tp):
                 continue
             # 规则书 p4: 不能攻击军力等级大于或等于你的玩家
-            if civ_values(db, tp).strength >= attacker_strength:
+            if civ_values(db, tp, state.players, target).strength >= attacker_strength:
                 continue
             if p.military_actions < aggression_cost(tp, card):
                 continue
@@ -177,7 +214,7 @@ def seed_event(db: CardDB, state: GameState, action: SeedEvent) -> GameState:
         state, future_events=(action.card_id,) + state.future_events)
     # 2. 揭示 current_events 顶牌; 空 -> 无事发生
     if not state.current_events:
-        return replace(state, phase=Phase.ACTION)
+        return _after_political_action(state, idx)
     revealed = state.current_events[0]
     state = replace(state, current_events=state.current_events[1:])
     card = db.get(revealed)
@@ -192,6 +229,20 @@ def seed_event(db: CardDB, state: GameState, action: SeedEvent) -> GameState:
     # 4. 揭示的是 current_events 最后一张 -> 重洗 future 成为新 current
     if not state.current_events and state.future_events:
         state = _reshuffle_future_events(db, state)
+    return _after_political_action(state, idx)
+
+
+def _after_political_action(state: GameState, idx: int) -> GameState:
+    """政治动作结算后的相位: Julius Caesar 一次性双政治.
+
+    领袖为 julius_caesar 且 caesar_used=False -> phase 回 POLITICS 并置
+    caesar_used=True(本局一次); 否则 -> ACTION(每回合限 1 政治行动)。
+    条约拒绝(规则书 p4 明示本回合不能再政治行动)与体面退出不经此钩子。
+    """
+    p = state.players[idx]
+    if p.leader == effects.LEADER_JULIUS_CAESAR and not p.caesar_used:
+        state = replace_player(state, idx, replace(p, caesar_used=True))
+        return replace(state, phase=Phase.POLITICS)
     return replace(state, phase=Phase.ACTION)
 
 
@@ -472,7 +523,20 @@ ATTACK_BLOCKING_PACTS: frozenset[str] = frozenset({
     "peace_treaty", "acceptance_of_supremacy", "loss_of_sovereignty",
 })
 """停战类条约(条约文本含"不可攻击"): 生效中不可互相攻击/宣战.
-条约建模 T10 落地; 约定双方玩家 pacts 同录条约卡 id。"""
+缔约双方 pacts 各录 (卡 id, 本方侧), 判定取卡 id 交集。"""
+
+ATTACK_ENDING_PACTS: frozenset[str] = frozenset({
+    "military_alliance", "promise_of_military_protection",
+})
+"""攻击终止类条约(卡牌数值表 p3: "若一方攻击另一方, 条约终止"):
+一方攻击另一方时立即从游戏中移除(规则书 p4 侵略节), 先移除再快照。"""
+
+OPEN_BORDERS_PACT = "open_borders_agreement"
+OPEN_BORDERS_ATTACK_BONUS = 2
+"""开放边境协议: 若一方攻击另一方, 攻击者 +2 军力(卡牌数值表 p3)."""
+
+LOSS_OF_SOVEREIGNTY_PACT = "loss_of_sovereignty"
+"""主权丧失: 除双方互不攻击外, 无人能对 B 侧宣战(卡牌数值表 p3)."""
 
 GANDHI_COST_MULTIPLIER = 2
 """甘地被动: 针对其文明的侵略/战争花费双倍军事行动(卡文本)."""
@@ -512,7 +576,40 @@ def aggression_cost(target: PlayerState, card: CardDefinition) -> int:
 def _pact_blocks_attack(attacker: PlayerState, target: PlayerState) -> bool:
     """停战类条约生效中(双方 pacts 同录同一条约卡 id)则不可攻击."""
     return bool(
-        ATTACK_BLOCKING_PACTS & set(attacker.pacts) & set(target.pacts))
+        ATTACK_BLOCKING_PACTS
+        & {card_id for card_id, _ in attacker.pacts}
+        & {card_id for card_id, _ in target.pacts})
+
+
+def _shared_pact(a: PlayerState, b: PlayerState, card_id: str) -> bool:
+    """双方 pacts 同录指定条约卡 id(缔约关系)."""
+    return (
+        any(cid == card_id for cid, _ in a.pacts)
+        and any(cid == card_id for cid, _ in b.pacts))
+
+
+def _end_pacts_on_attack(state: GameState, attacker: int, target: int) -> GameState:
+    """攻击终止类条约: 攻击方与目标缔约的此类条约立即从游戏中移除.
+
+    规则书 p4 侵略节: "如果你和你的对手之间有一张只要你攻击就会停止生效
+    的条约牌, 立即将其从游戏中移除。"先移除再计算攻击快照(攻击不携带
+    即将终止条约的加成)。
+    """
+    for card_id in ATTACK_ENDING_PACTS:
+        if _shared_pact(state.players[attacker], state.players[target], card_id):
+            state = _remove_pact(state, card_id)
+    return state
+
+
+def _attack_strength_snapshot(
+    db: CardDB, state: GameState, attacker: int, target: int,
+) -> int:
+    """攻击方军力快照 = civ 军力 + 开放边境攻击加成(与目标缔约时 +2)."""
+    strength = civ_values(db, state.players[attacker], state.players, attacker).strength
+    if _shared_pact(
+            state.players[attacker], state.players[target], OPEN_BORDERS_PACT):
+        strength += OPEN_BORDERS_ATTACK_BONUS
+    return strength
 
 
 def play_aggression(
@@ -521,8 +618,9 @@ def play_aggression(
     """PlayAggression 结算: 付军事行动费, 揭示侵略卡, 压防御响应 pending.
 
     合法性(目标军力严格更低/费用/条约/甘地)由 legal 保证; 攻击军力快照
-    入 context(响应期仅防御方变动, 判定以快照为准)。phase 保持 POLITICS
-    (pending 响应优先), 判定后由 _resolve_defense 置 ACTION。
+    入 context(响应期仅防御方变动, 判定以快照为准); 攻击终止类条约先移除
+    再快照。phase 保持 POLITICS(pending 响应优先), 判定后由
+    _resolve_defense 经 _after_political_action 置相位。
     """
     idx = state.current_player
     p = state.players[idx]
@@ -534,12 +632,15 @@ def play_aggression(
         p, hand_military=tuple(hand),
         military_actions=p.military_actions - cost)
     state = replace_player(state, idx, p)
+    # 攻击终止类条约(军事同盟/军事保护承诺)立即移除(先移除再快照)
+    state = _end_pacts_on_attack(state, idx, action.target)
     pending = PendingEffect(
         KIND_AGGRESSION_DEFENSE, 0, responder=action.target,
         context={
             "card": action.card_id,
             "attacker": idx,
-            "attack_strength": civ_values(db, p).strength,
+            "attack_strength": _attack_strength_snapshot(
+                db, state, idx, action.target),
             "defense_bonus": 0,
             "defense_cards": 0,
         })
@@ -606,23 +707,25 @@ def _resolve_defense(
     """侵略判定: 防御方军力(civ + 奖励) >= 攻击快照 -> 失败; 否则结算效果.
 
     两种结果侵略牌均入军事弃牌堆(规则书 p4: 弃置相应的侵略牌); 结算后
-    phase -> ACTION(每回合限 1 政治行动)。
+    经 _after_political_action 定相位(每回合限 1 政治行动; Caesar 一次性
+    双政治可回 POLITICS)。
     """
     context = pending.context
     card_id = str(context["card"])
     attacker = int(context["attacker"])
     victim = acting_index(state)
     defense = (
-        civ_values(db, state.players[victim]).strength
+        civ_values(db, state.players[victim], state.players, victim).strength
         + int(context["defense_bonus"])
     )
     state = replace(
-        state, pending=state.pending[1:], phase=Phase.ACTION,
+        state, pending=state.pending[1:],
         military_discard=state.military_discard + (card_id,))
-    if defense >= int(context["attack_strength"]):
-        return state
-    handler = AGGRESSION_HANDLERS[db.get(card_id).handler]
-    return handler(state, db, attacker, victim)
+    if defense < int(context["attack_strength"]):
+        handler = AGGRESSION_HANDLERS[db.get(card_id).handler]
+        state = handler(state, db, attacker, victim)
+    # 判定完成 -> 政治行动结算(Caesar 一次性双政治可回 POLITICS)
+    return _after_political_action(state, attacker)
 
 
 def apply_aggression_choice(
@@ -949,14 +1052,22 @@ def _war_actions(
         if card.handler not in WAR_HANDLERS:
             continue
         for target, tp in enumerate(state.players):
-            if target == idx:
+            if target == idx or tp.resigned:
                 continue
             if _pact_blocks_attack(p, tp):
+                continue
+            if _sovereignty_blocks_war(tp):
+                # 主权丧失: 无人能对 B 侧宣战(卡牌数值表 p3)
                 continue
             if p.military_actions < aggression_cost(tp, card):
                 continue
             actions.append(DeclareWar(card_id, target))
     return actions
+
+
+def _sovereignty_blocks_war(target: PlayerState) -> bool:
+    """目标持有主权丧失 B 侧 -> 无人能对其宣战(含缔约方外的第三方)."""
+    return (LOSS_OF_SOVEREIGNTY_PACT, "B") in target.pacts
 
 
 def declare_war(db: CardDB, state: GameState, action: DeclareWar) -> GameState:
@@ -977,7 +1088,9 @@ def declare_war(db: CardDB, state: GameState, action: DeclareWar) -> GameState:
         military_actions=p.military_actions - cost,
         declared_wars=p.declared_wars + ((action.card_id, action.target),))
     state = replace_player(state, idx, p)
-    return replace(state, phase=Phase.ACTION)
+    # 攻击终止类条约(军事同盟/军事保护承诺)立即移除
+    state = _end_pacts_on_attack(state, idx, action.target)
+    return _after_political_action(state, idx)
 
 
 def resolve_declared_wars(db: CardDB, state: GameState) -> GameState:
@@ -994,8 +1107,9 @@ def resolve_declared_wars(db: CardDB, state: GameState) -> GameState:
     idx = state.current_player
     while state.players[idx].declared_wars:
         card_id, target = state.players[idx].declared_wars[0]
-        attacker_strength = civ_values(db, state.players[idx]).strength
-        target_strength = civ_values(db, state.players[target]).strength
+        attacker_strength = _attack_strength_snapshot(db, state, idx, target)
+        target_strength = civ_values(
+            db, state.players[target], state.players, target).strength
         # 战争牌无论结果均入军事弃牌堆, declared_wars 移除该卡
         p = state.players[idx]
         state = replace_player(
@@ -1139,3 +1253,214 @@ WAR_HANDLERS.update({
     "war_over_territory_ii": _war_over_territory,
     "war_over_culture_iii": _war_over_culture,
 })
+
+
+# --- 条约提议/接受/拒绝/取缔(规则书 p4, P2-T10) -------------------------------------
+
+KIND_PACT_OFFER = "pact_offer"
+"""条约提议 pending: responder=目标, context={card, proposer, side(提出者
+自己扮演的侧 "A"/"B")}; 响应动作为 PactAccept/PactReject(恒可响应,
+不可放弃, 不入 DECLINABLE 白名单)。"""
+
+SYMMETRIC_PACTS: frozenset[str] = frozenset({
+    "open_borders_agreement", "scientific_cooperation",
+    "international_tourism", "military_alliance", "peace_treaty",
+})
+"""对称条约(卡牌数值表 p3 Sym=Yes): 两侧效果相同, 提议仅举侧 "A"."""
+
+PACT_SIDE_A = "A"
+PACT_SIDE_B = "B"
+
+MIN_PLAYERS_FOR_PACTS = 3
+"""条约动作(提议/取缔)的最少在局人数(规则书 p4: 2 人游戏时不允许)."""
+
+
+def _pact_actions(
+    db: CardDB, state: GameState, idx: int, p: PlayerState,
+) -> list[Action]:
+    """ProposePact/CancelPact 枚举(规则书 p4 提出条约/取缔条约).
+
+    仅 3-4 人在局(未退出人数 >= 3)时生成; 提议目标为任一在局对手,
+    非对称条约举 A/B 两个侧(提出者自己扮演的侧), 对称条约仅举 "A";
+    取缔按自己 pacts 中生效的条约逐张枚举。
+    """
+    if len(active_indices(state)) < MIN_PLAYERS_FOR_PACTS:
+        return []
+    actions: list[Action] = []
+    for card_id in dict.fromkeys(p.hand_military):
+        if db.get(card_id).category is not CardCategory.PACT:
+            continue
+        sides = (PACT_SIDE_A,) if card_id in SYMMETRIC_PACTS else (
+            PACT_SIDE_A, PACT_SIDE_B)
+        for target, tp in enumerate(state.players):
+            if target == idx or tp.resigned:
+                continue
+            for side in sides:
+                actions.append(ProposePact(card_id, target, side))
+    actions.extend(CancelPact(card_id) for card_id, _ in p.pacts)
+    return actions
+
+
+def propose_pact(db: CardDB, state: GameState, action: ProposePact) -> GameState:
+    """ProposePact 结算: 展示条约牌(离手), 压 pact_offer pending 由对方响应.
+
+    合法性(3-4 人/手牌 PACT 卡/目标在局非己)由 legal 保证; phase 保持
+    POLITICS(pending 响应优先), 接受/拒绝后定相位。
+    """
+    idx = state.current_player
+    p = state.players[idx]
+    hand = list(p.hand_military)
+    hand.remove(action.card_id)
+    state = replace_player(state, idx, replace(p, hand_military=tuple(hand)))
+    pending = PendingEffect(
+        KIND_PACT_OFFER, 0, responder=action.target,
+        context={"card": action.card_id, "proposer": idx, "side": action.side})
+    return replace(state, pending=state.pending + (pending,))
+
+
+def pact_accept(db: CardDB, state: GameState) -> GameState:
+    """PactAccept 结算: 双方既有条约失效, 新条约缔结并立即生效.
+
+    规则书 p4: 任一当事人游戏区域中已有条约牌(无论与对方还是与其他玩家
+    缔结)立即失效, 从游戏中移除; 新条约双方 pacts 各录 (卡 id, 本方侧),
+    静态/被动效果经 civ.pact_bonuses 合成(无需即时结算)。注意: 条约不
+    取消已宣告的战争(declared_wars 不受影响)。
+    """
+    pending = state.pending[0]
+    proposer = int(pending.context["proposer"])
+    responder = acting_index(state)
+    card_id = str(pending.context["card"])
+    side = str(pending.context["side"])
+    other_side = PACT_SIDE_B if side == PACT_SIDE_A else PACT_SIDE_A
+    state = replace(state, pending=state.pending[1:])
+    # 双方既有条约立即失效(入 removed)
+    for seat in (proposer, responder):
+        for old_card_id, _ in state.players[seat].pacts:
+            state = _remove_pact(state, old_card_id)
+    p = state.players[proposer]
+    state = replace_player(
+        state, proposer, replace(p, pacts=p.pacts + ((card_id, side),)))
+    q = state.players[responder]
+    state = replace_player(
+        state, responder, replace(q, pacts=q.pacts + ((card_id, other_side),)))
+    return _after_political_action(state, proposer)
+
+
+def pact_reject(db: CardDB, state: GameState) -> GameState:
+    """PactReject 结算: 条约牌拿回提出者手牌, 其本回合不能再执行政治行动.
+
+    规则书 p4 明示"本回合你不能再执行政治行动", 故 phase -> ACTION,
+    Julius Caesar 双政治不覆盖此限制。
+    """
+    pending = state.pending[0]
+    proposer = int(pending.context["proposer"])
+    card_id = str(pending.context["card"])
+    state = replace(state, pending=state.pending[1:])
+    p = state.players[proposer]
+    state = replace_player(
+        state, proposer, replace(p, hand_military=p.hand_military + (card_id,)))
+    return replace(state, phase=Phase.ACTION)
+
+
+def cancel_pact(db: CardDB, state: GameState, action: CancelPact) -> GameState:
+    """CancelPact 结算: 你为当事人的一项条约从游戏中移除(双方 pacts 同删).
+
+    规则书 p4 取缔条约: 将该条约牌从游戏中移除, 它不再影响你和另一位
+    当事人; 静态效果经 civ 合成自动终止。phase -> ACTION(Caesar 可双政治)。
+    """
+    state = _remove_pact(state, action.card_id)
+    return _after_political_action(state, state.current_player)
+
+
+def _remove_pact(state: GameState, card_id: str) -> GameState:
+    """将指定条约从所有持有者 pacts 移除, 条约牌入 removed(从游戏中移除)."""
+    for seat, p in enumerate(state.players):
+        if any(cid == card_id for cid, _ in p.pacts):
+            pacts = tuple(e for e in p.pacts if e[0] != card_id)
+            state = replace_player(state, seat, replace(p, pacts=pacts))
+    return replace(state, removed=state.removed + (card_id,))
+
+
+# --- 体面退出(规则书 p4, P2-T10) ----------------------------------------------------
+
+RESIGN_WAR_CULTURE = 7
+"""对退出者宣战的玩家将战争牌从游戏中移除并获得的文化(规则书 p4)."""
+
+
+def resign(db: CardDB, state: GameState) -> GameState:
+    """Resign 结算: 当前玩家文明退出游戏(规则书 p4 体面退出).
+
+    - 手牌入相应弃牌堆; 游戏区域卡牌(developed/领袖/已完成与进行中奇迹/
+      殖民地/实体阵型/自己在途战争牌)入 removed; 进行中奇迹已付阶段蓝点
+      退回供给区(与时代结束过期口径一致); 黄/蓝标记与工人随文明退出
+      冻结保留(守恒口径, 不再参与游戏; 政体卡字段保留不计入 removed);
+    - 与其有关的条约从双方 pacts 移除并入 removed;
+    - 其他玩家向其宣告的战争: 战争牌入 removed, 宣战者 +7 文化;
+    - 只剩 1 人 -> 游戏立即结束, 该玩家直接判胜(不比文化, final_scores
+      其严格最高); 仍有 >=2 人 -> phase -> ACTION, 轮换跳过其座位
+      (turn.proceed), 退出者回合仅剩 PassTurn(legal 保证)。
+    """
+    idx = state.current_player
+    p = state.players[idx]
+    # 手牌弃置(官方文本: "弃置你的手牌")
+    state = replace(
+        state,
+        discard=state.discard + p.hand_civil,
+        military_discard=state.military_discard + p.hand_military)
+    # 游戏区域卡牌入 removed
+    removed = list(state.removed)
+    removed.extend(p.developed)
+    removed.extend(p.wonders)
+    if p.leader is not None:
+        removed.append(p.leader)
+    if p.wonder_progress is not None:
+        removed.append(p.wonder_progress[0])
+    removed.extend(p.colonies)
+    if p.tactics is not None and not p.tactics_copied:
+        removed.append(p.tactics)
+    removed.extend(card_id for card_id, _ in p.declared_wars)
+    # 与退出者有关的条约牌入 removed(下方从双方 pacts 移除)
+    resigner_pact_ids = {card_id for card_id, _ in p.pacts}
+    removed.extend(sorted(resigner_pact_ids))
+    state = replace(state, removed=tuple(removed))
+    # 进行中奇迹已付阶段蓝点退回供给区
+    blue_refund = p.wonder_progress[1] if p.wonder_progress is not None else 0
+    state = replace_player(state, idx, replace(
+        p,
+        resigned=True,
+        hand_civil=(), hand_military=(), developed=(), leader=None,
+        wonders=(), wonder_progress=None, colonies=(),
+        tactics=None, declared_wars=(), pacts=(),
+        blue_bank=p.blue_bank + blue_refund))
+    # 其他玩家: 相关条约移除; 对退出者的战争牌移除且宣战者 +7 文化
+    war_cards_on_resigner = [
+        card_id
+        for q in state.players for card_id, target in q.declared_wars
+        if target == idx
+    ]
+    if war_cards_on_resigner:
+        state = replace(
+            state, removed=state.removed + tuple(war_cards_on_resigner))
+    for seat, q in enumerate(state.players):
+        if q.resigned:
+            continue
+        updates: dict = {}
+        if resigner_pact_ids:
+            updates["pacts"] = tuple(
+                e for e in q.pacts if e[0] not in resigner_pact_ids)
+        war_bonus = sum(
+            RESIGN_WAR_CULTURE for _, target in q.declared_wars if target == idx)
+        if war_bonus:
+            updates["declared_wars"] = tuple(
+                w for w in q.declared_wars if w[1] != idx)
+            updates["culture"] = q.culture + war_bonus
+        if updates:
+            state = replace_player(state, seat, replace(q, **updates))
+    # 只剩 1 人 -> 游戏立即结束, 该玩家直接判胜(不比文化)
+    active = active_indices(state)
+    if len(active) == 1:
+        winner = active[0]
+        scores = [q.culture for q in state.players]
+        scores[winner] = max(scores) + 1
+        return replace(state, terminal=True, final_scores=tuple(scores))
+    return replace(state, phase=Phase.ACTION)
