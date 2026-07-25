@@ -1,11 +1,14 @@
 """合法动作枚举(官方规则 P1).
 
 legal_actions(db, state) 枚举当前玩家的全部合法动作:
-- 终局 -> []; pending 非空 -> 仅 [PassTurn](Task 7 改为结算 pending);
+- 终局 -> []; pending 非空 -> 仅可结算首个 pending 的动作 + PassTurn;
 - 第一回合(state.round == 1) -> 仅 TakeCard + 末尾 PassTurn;
 - 其余情况: TakeCard / DevelopTech / DevelopGovernment / Build / Upgrade /
   Destroy / Disband / PlayLeader / BuildWonderStage / PlayActionCard,
   PassTurn 恒在末尾。
+
+pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0)。
+回合修饰(turn_discounts): 目前仅兵种的 "unit_build" 建造折扣。
 """
 
 from tta.engine import effects
@@ -33,10 +36,20 @@ from tta.engine.enums import (
     CardCategory,
 )
 from tta.engine.model import CardDB, CardDefinition
-from tta.engine.state import GameState, PlayerState
+from tta.engine.state import GameState, PendingEffect, PlayerState
 
 ROW_COSTS: tuple[int, ...] = (1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3)
 """卡牌列各位置拿牌白点费(0-4 号位 1 点, 5-9 号位 2 点, 10-12 号位 3 点)."""
+
+UNIT_BUILD_DISCOUNT_KEY = "unit_build"
+"""turn_discounts 中兵种建造折扣的键(回合修饰类行动卡写入)."""
+
+
+def turn_discount_for(p: PlayerState, category: CardCategory) -> int:
+    """回合修饰类效果提供的建造折扣(当前仅兵种的 unit_build)."""
+    if category in UNIT_CATEGORIES:
+        return p.turn_discounts.get(UNIT_BUILD_DISCOUNT_KEY, 0)
+    return 0
 
 _AGE_ORDER = (Age.A, Age.I, Age.II, Age.III)
 
@@ -105,19 +118,26 @@ def _government_actions(db: CardDB, p: PlayerState) -> list[Action]:
     return actions
 
 
-def _build_actions(db: CardDB, p: PlayerState) -> list[Action]:
+def _build_actions(
+    db: CardDB,
+    p: PlayerState,
+    categories: frozenset[CardCategory] = WORKER_CATEGORIES,
+    point_cost: int = 1,
+    discount: int = 0,
+) -> list[Action]:
+    """Build 枚举. pending 子行动用 point_cost=0 + discount 调用."""
     actions: list[Action] = []
     civ = civ_values(db, p)
     resources = resource_total(db, p)
     developed = list(p.developed)
     for card_id in dict.fromkeys(developed):
         card = db.get(card_id)
-        if card.category not in WORKER_CATEGORIES:
+        if card.category not in categories:
             continue
         if card.category in UNIT_CATEGORIES:
-            if p.military_actions < 1:
+            if p.military_actions < point_cost:
                 continue
-        elif p.civil_actions < 1:
+        elif p.civil_actions < point_cost:
             continue
         if p.worker_pool < 1:
             continue
@@ -125,7 +145,9 @@ def _build_actions(db: CardDB, p: PlayerState) -> list[Action]:
         placed = slots.get(card_id, 0)
         if placed >= developed.count(card_id):
             continue
-        if resources < card.build_cost:
+        cost = max(
+            0, card.build_cost - discount - turn_discount_for(p, card.category))
+        if resources < cost:
             continue
         if card.category in URBAN_CATEGORIES and placed == 0:
             # 城市建筑上限按类别计建筑数(每张有工人的卡 = 一座建筑)
@@ -143,21 +165,28 @@ def _higher_level(from_card: CardDefinition, to_card: CardDefinition) -> bool:
     return to_key > from_key
 
 
-def _upgrade_actions(db: CardDB, p: PlayerState) -> list[Action]:
+def _upgrade_actions(
+    db: CardDB,
+    p: PlayerState,
+    categories: frozenset[CardCategory] = WORKER_CATEGORIES,
+    point_cost: int = 1,
+    discount: int = 0,
+) -> list[Action]:
+    """Upgrade 枚举. pending 子行动用 point_cost=0 + discount 调用."""
     actions: list[Action] = []
     resources = resource_total(db, p)
     developed = list(p.developed)
     for from_id in dict.fromkeys(developed):
         from_card = db.get(from_id)
-        if from_card.category not in WORKER_CATEGORIES:
+        if from_card.category not in categories:
             continue
         slots = p.buildings.get(from_card.category.value, {})
         if slots.get(from_id, 0) < 1:
             continue
         if from_card.category in UNIT_CATEGORIES:
-            if p.military_actions < 1:
+            if p.military_actions < point_cost:
                 continue
-        elif p.civil_actions < 1:
+        elif p.civil_actions < point_cost:
             continue
         for to_id in dict.fromkeys(developed):
             if to_id == from_id:
@@ -170,7 +199,9 @@ def _upgrade_actions(db: CardDB, p: PlayerState) -> list[Action]:
             if slots.get(to_id, 0) >= developed.count(to_id):
                 continue
             diff = max(0, to_card.build_cost - from_card.build_cost)
-            if resources < diff:
+            cost = max(
+                0, diff - discount - turn_discount_for(p, from_card.category))
+            if resources < cost:
                 continue
             actions.append(Upgrade(from_id, to_id))
     return actions
@@ -204,8 +235,11 @@ def _leader_actions(db: CardDB, p: PlayerState) -> list[Action]:
     return actions
 
 
-def _wonder_actions(db: CardDB, p: PlayerState) -> list[Action]:
-    if p.wonder_progress is None or p.civil_actions < 1:
+def _wonder_actions(
+    db: CardDB, p: PlayerState, point_cost: int = 1, discount: int = 0,
+) -> list[Action]:
+    """BuildWonderStage 枚举. pending 子行动用 point_cost=0 + discount 调用."""
+    if p.wonder_progress is None or p.civil_actions < point_cost:
         return []
     card_id, stages_done = p.wonder_progress
     stages = db.get(card_id).wonder_stages
@@ -214,9 +248,27 @@ def _wonder_actions(db: CardDB, p: PlayerState) -> list[Action]:
     # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 要求供给区蓝点 > 0
     if p.blue_bank < 1:
         return []
-    if resource_total(db, p) < stages[stages_done]:
+    if resource_total(db, p) < max(0, stages[stages_done] - discount):
         return []
     return [BuildWonderStage()]
+
+
+def _pending_actions(
+    db: CardDB, p: PlayerState, pending: PendingEffect,
+) -> list[Action]:
+    """生成可结算首个 pending 的动作(0 行动点, 费用享折扣)."""
+    categories = effects.PENDING_BUILD_CATEGORIES.get(pending.kind)
+    if categories is not None:
+        actions = _build_actions(
+            db, p, categories=categories, point_cost=0,
+            discount=pending.discount)
+        actions += _upgrade_actions(
+            db, p, categories=categories, point_cost=0,
+            discount=pending.discount)
+        return actions
+    if pending.kind == effects.KIND_WONDER_STAGE:
+        return _wonder_actions(db, p, point_cost=0, discount=pending.discount)
+    return []
 
 
 def _action_card_actions(db: CardDB, p: PlayerState) -> list[Action]:
@@ -227,8 +279,12 @@ def _action_card_actions(db: CardDB, p: PlayerState) -> list[Action]:
         card = db.get(card_id)
         if card.category is not CardCategory.ACTION:
             continue
-        # 未注册处理器的行动卡不可打出(Task 7 填充注册表)
+        # 未注册处理器的行动卡不可打出
         if card.handler not in effects.ACTION_HANDLERS:
+            continue
+        # 折扣子行动类: 无合法子行动时不可打出(保证 pending 必可解)
+        spec = effects.PENDING_SPECS.get(card.handler)
+        if spec is not None and not _pending_actions(db, p, spec):
             continue
         actions.append(PlayActionCard(card_id))
     return actions
@@ -238,10 +294,13 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
     """枚举当前玩家全部合法动作(规则见模块 docstring)."""
     if state.terminal:
         return []
-    if state.pending:
-        # Task 7 改为仅生成可结算 pending 的动作
-        return [PassTurn()]
     p = state.players[state.current_player]
+    if state.pending:
+        # 仅生成可结算首个 pending 的动作; PassTurn 兜底(放弃 pending,
+        # 官方行动卡效果为强制, 引擎允许放弃, SIMPLIFICATION 见 apply)
+        actions = _pending_actions(db, p, state.pending[0])
+        actions.append(PassTurn())
+        return actions
     takes: list[Action] = [
         TakeCard(i) for i, card_id in enumerate(state.card_row)
         if card_id is not None and _take_card_legal(db, p, i, card_id)

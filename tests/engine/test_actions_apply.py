@@ -268,9 +268,9 @@ def test_build_wonder_stage_completion() -> None:
 def test_play_action_card_framework(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _db()
 
-    def handler(db: CardDB, state: GameState) -> GameState:
-        p = state.players[state.current_player]
-        return replace_player(state, state.current_player,
+    def handler(state: GameState, player_index: int, db: CardDB) -> GameState:
+        p = state.players[player_index]
+        return replace_player(state, player_index,
                               copy.replace(p, culture=p.culture + 5))
 
     monkeypatch.setitem(effects.ACTION_HANDLERS, "test_action", handler)
@@ -279,6 +279,7 @@ def test_play_action_card_framework(monkeypatch: pytest.MonkeyPatch) -> None:
     assert new.players[0].culture == 5
     assert new.players[0].hand_civil == ()
     assert new.players[0].civil_actions == 3
+    assert new.discard == ("tactics_test",)
 
 
 def test_apply_does_not_mutate_input() -> None:

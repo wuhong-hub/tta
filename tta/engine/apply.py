@@ -25,7 +25,7 @@ from tta.engine.actions import (
 )
 from tta.engine.economy import pay
 from tta.engine.enums import UNIT_CATEGORIES, CardCategory
-from tta.engine.legal import ROW_COSTS, legal_actions
+from tta.engine.legal import ROW_COSTS, legal_actions, turn_discount_for
 from tta.engine.model import CardDB
 from tta.engine.state import GameState, PlayerState, replace_player
 
@@ -33,6 +33,10 @@ from tta.engine.state import GameState, PlayerState, replace_player
 def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     """应用动作并返回新状态; 非法动作抛 IllegalActionError."""
     if isinstance(action, PassTurn):
+        if state.pending and not state.terminal:
+            # SIMPLIFICATION: 官方行动卡效果为强制; 引擎允许 PassTurn 放弃
+            # pending(仅丢弃, 回合推进仍由 Task 8 实现)。
+            return replace(state, pending=())
         raise NotImplementedError("Task 8")
     if state.terminal:
         msg = "游戏已结束, 无合法动作"
@@ -146,8 +150,12 @@ def _develop_government(
 def _build(db: CardDB, state: GameState, card_id: str) -> GameState:
     p = state.players[state.current_player]
     card = db.get(card_id)
-    p = _spend_point(p, military=card.category in UNIT_CATEGORIES)
-    p = pay(db, p, "resource", card.build_cost)
+    free, discount, state = _match_build_pending(state, card.category)
+    if not free:
+        p = _spend_point(p, military=card.category in UNIT_CATEGORIES)
+    cost = max(
+        0, card.build_cost - discount - turn_discount_for(p, card.category))
+    p = pay(db, p, "resource", cost)
     p = replace(p, worker_pool=p.worker_pool - 1)
     p = _add_worker(p, card.category, card_id, +1)
     return _update(state, p)
@@ -157,12 +165,33 @@ def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
     p = state.players[state.current_player]
     from_card = db.get(action.from_card_id)
     to_card = db.get(action.to_card_id)
-    p = _spend_point(p, military=from_card.category in UNIT_CATEGORIES)
+    free, discount, state = _match_build_pending(state, from_card.category)
+    if not free:
+        p = _spend_point(p, military=from_card.category in UNIT_CATEGORIES)
     diff = max(0, to_card.build_cost - from_card.build_cost)
-    p = pay(db, p, "resource", diff)
+    cost = max(
+        0, diff - discount - turn_discount_for(p, from_card.category))
+    p = pay(db, p, "resource", cost)
     p = _add_worker(p, from_card.category, action.from_card_id, -1)
     p = _add_worker(p, to_card.category, action.to_card_id, +1)
     return _update(state, p)
+
+
+def _match_build_pending(
+    state: GameState, category: CardCategory,
+) -> tuple[bool, int, GameState]:
+    """Build/Upgrade 与首个 pending 匹配时: pop pending, 返回 (0 行动点, 折扣).
+
+    不匹配(或无 pending)时返回 (False, 0, 原 state), 走正常扣点全费流程。
+    合法性由 legal 保证: pending 非空时只会生成匹配的动作。
+    """
+    if not state.pending:
+        return False, 0, state
+    pending = state.pending[0]
+    categories = effects.PENDING_BUILD_CATEGORIES.get(pending.kind)
+    if categories is None or category not in categories:
+        return False, 0, state
+    return True, pending.discount, replace(state, pending=state.pending[1:])
 
 
 def _remove_worker(
@@ -200,8 +229,13 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
         raise IllegalActionError(msg)
     card_id, stages_done = p.wonder_progress
     stages = db.get(card_id).wonder_stages
-    p = _spend_point(p, military=False)
-    p = pay(db, p, "resource", stages[stages_done])
+    free, discount = False, 0
+    if state.pending and state.pending[0].kind == effects.KIND_WONDER_STAGE:
+        free, discount = True, state.pending[0].discount
+        state = replace(state, pending=state.pending[1:])
+    if not free:
+        p = _spend_point(p, military=False)
+    p = pay(db, p, "resource", max(0, stages[stages_done] - discount))
     # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 仅从供给区盖 1 蓝点
     p = replace(p, blue_bank=p.blue_bank - 1)
     stages_done += 1
@@ -221,8 +255,9 @@ def _play_action_card(
     if handler is None:  # pragma: no cover - legal 已排除
         msg = f"行动卡 {action.card_id!r} 未注册处理器"
         raise IllegalActionError(msg)
+    # 打出流程: 扣 1 白点 + 手牌移除 + 卡入弃牌堆, 再交 handler 结算效果
     p = _remove_from_hand(p, action.card_id)
     p = _spend_point(p, military=False)
+    state = replace(state, discard=state.discard + (action.card_id,))
     state = _update(state, p)
-    # 效果结算、pending 压栈与弃牌由处理器负责(Task 7)
-    return handler(db, state)
+    return handler(state, state.current_player, db)

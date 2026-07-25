@@ -68,7 +68,7 @@ class BuildWonderStage:
 
 @dataclass(frozen=True)
 class PlayActionCard:
-    """打出手牌中的行动卡: 1 白点, 结算见 effects.ACTION_HANDLERS(Task 7)."""
+    """打出手牌中的行动卡: 1 白点, 结算见 effects.ACTION_HANDLERS."""
 
     card_id: str
 
