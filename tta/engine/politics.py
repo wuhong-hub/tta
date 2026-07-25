@@ -294,6 +294,9 @@ def colonize_sacrifice(
         raise IllegalActionError(msg)
     counts: dict[str, int] = {}
     for card_id in units:
+        if card_id not in db.cards:
+            msg = f"未知卡牌 id: {card_id!r}"
+            raise IllegalActionError(msg)
         if db.get(card_id).category not in UNIT_CATEGORIES:
             msg = f"{card_id!r} 不是军事单位卡, 不可牺牲"
             raise IllegalActionError(msg)

@@ -26,6 +26,20 @@ def test_population_cost_empty_bank() -> None:
         population_cost(0)
 
 
+@pytest.mark.parametrize("bank", [19, 20, 25])
+def test_yellow_bank_over_track_clamped(bank: int) -> None:
+    # 殖民地永久效果/事件可给额外黄点(规则书 p10: 轨道填满后多余标记放到
+    # 最右侧区域); 轨道查询按位置 18 区段处理, 不得抛 ValueError
+    assert population_cost(bank) == 2
+    assert consumption_value(bank) == 0
+    assert happiness_required(bank) == 0
+
+
+def test_yellow_bank_negative_still_raises() -> None:
+    with pytest.raises(ValueError):
+        population_cost(-1)
+
+
 @pytest.mark.parametrize("bank,expected", [
     (18, 0), (17, 1), (16, 1), (15, 2), (14, 2), (13, 2),
     (12, 2), (11, 2), (10, 2), (9, 3), (8, 3), (7, 3),

@@ -332,7 +332,27 @@ def test_sacrifice_invalid_inputs_raise() -> None:
         apply(_bid_state(), ColonizeSacrifice(("warriors",)), db)
 
 
-def test_sacrifice_insufficient_strength_raises() -> None:
+def test_sacrifice_unknown_card_id_raises_illegal_action() -> None:
+    # 未知卡 id 统一抛 IllegalActionError(而非 db.get 的 KeyError), 消息含卡 id
+    db = build_card_db()
+    state = _sacrifice_state(pending_kwargs={"bid": 1})
+    with pytest.raises(IllegalActionError, match="no_such_card"):
+        apply(state, ColonizeSacrifice(("no_such_card",)), db)
+
+
+def test_yellow_bank_over_18_legal_actions_ok() -> None:
+    # 黄点银行 18(轨道已满) + 牺牲回 1 工人 + 殖民地永久 +1 黄点 -> 20,
+    # 超出轨道合法(规则书 p10); 后续 legal_actions 不得因轨道查询崩溃
+    db = build_card_db()
+    p0 = _player("P0", yellow_bank=18)
+    state = _sacrifice_state(player=p0, pending_kwargs={"bid": 1})
+    new = apply(state, ColonizeSacrifice(("warriors",)), db)
+    assert new.players[0].yellow_bank == 20
+    legal = legal_actions(db, new)
+    assert legal  # 非空且不抛异常
+
+
+
     db = build_card_db()
     state = _sacrifice_state(pending_kwargs={"bid": 2})
     with pytest.raises(IllegalActionError):

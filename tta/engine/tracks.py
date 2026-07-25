@@ -46,25 +46,35 @@ def _yellow_section_at(position: int) -> YellowSection:
     raise ValueError(f"position out of range: {position}")
 
 
+def _clamp_yellow(yellow_bank: int) -> int:
+    """黄点银行钳制到轨道格数.
+
+    殖民地永久效果/事件可给玩家额外黄点, 银行可超过轨道格数(规则书 p10:
+    轨道填满后多余标记放到最右侧区域); 轨道查询按最右侧区段处理。
+    """
+    return min(yellow_bank, YELLOW_SPACES)
+
+
 def population_cost(yellow_bank: int) -> int:
-    """增人口食物费 = 最右被占用区段下方数字."""
+    """增人口食物费 = 最右被占用区段下方数字; 超过轨道按位置 18 区段."""
     if yellow_bank <= 0:
         raise ValueError("yellow bank is empty")
-    return _yellow_section_at(yellow_bank).pop_cost
+    return _yellow_section_at(_clamp_yellow(yellow_bank)).pop_cost
 
 
 def consumption_value(yellow_bank: int) -> int:
-    """食物消耗 = 最左未覆盖格所属区段的消耗值; 全覆盖为 0."""
+    """食物消耗 = 最左未覆盖格所属区段的消耗值; 全覆盖(含超额)为 0."""
     if yellow_bank >= YELLOW_SPACES:
         return 0
     return _yellow_section_at(yellow_bank + 1).consumption
 
 
 def happiness_required(yellow_bank: int) -> int:
-    """幸福需求 = 最左被整体拿空区段的需求数; 无则 0.
+    """幸福需求 = 最左被整体拿空区段的需求数; 无则(含超额)0.
 
     区段整体拿空 <=> 该区段最左格位置 > yellow_bank.
     """
+    yellow_bank = _clamp_yellow(yellow_bank)
     left = 1
     for sec in YELLOW_SECTIONS:
         if left > yellow_bank:  # 该区段整体已空
