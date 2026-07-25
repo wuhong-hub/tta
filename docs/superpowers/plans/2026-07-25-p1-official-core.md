@@ -246,7 +246,11 @@ git commit -m "feat(engine): 黄点/蓝点版图轨道数值查询"
   - `SpecialType`: `LAW, WARFARE, EXPLORATION, CONSTRUCTION`（特殊科技子类）
   - `GovernmentStats(civil_actions, military_actions, urban_limit, bonus: dict[str, int])`
   - `CardDefinition`（字段见下）;`CardDB(cards, initial_tableau, initial_government)` + `CardDB.deck_for(age: Age, num_players: int) -> tuple[str, ...]`（按 quantities 组牌）
-- 说明：此任务会破坏 P0 全部测试，属预期；后续任务逐个修复，本任务只需自身测试通过（允许 `uv run pytest tests/engine/test_model.py tests/engine/test_tracks.py` 单独跑）
+- 说明：此任务会打破 P0 旧模型，属预期。**本任务必须同步清理旧产物，保证提交时 `uv run pytest -q` 全绿**:
+  - 删除：`tta/cards/minimal.py`、`tests/cards/test_minimal.py`、`tests/engine/test_legal.py`、`tests/engine/test_apply.py`、`tests/engine/test_turn.py`、`tests/engine/test_setup.py`、`tests/orchestrator/test_runner.py`、`tests/cli/test_cli.py`、`tests/property/test_invariants.py`、`tests/golden/test_golden_game.py`
+  - `tta/cli/main.py` 暂改为打印 `"P1 重构中， selfplay 暂不可用"`(Task 13/14 恢复）;`tta/agents/`、`tta/orchestrator/runner.py`、`tta/replay/` 保持不动（它们与卡牌模型无耦合）
+  - 保留：`tests/engine/test_tracks.py`、`tests/engine/test_rng.py`；本任务重写 `tests/engine/test_model.py`
+  - 后续任务逐步重建覆盖：T3 重写 test_state、T6 重写动作测试、T8 重写回合测试、T13 重写 test_setup 与 CLI、T14 重写属性/黄金/运行器测试
 
 ```python
 # CardDefinition 字段(实现依据,测试逐项断言)
@@ -511,9 +515,8 @@ PassTurn()
 ### Task 13: new_game 官方化 + 删除 minimal
 
 **Files:**
-- Modify: `tta/engine/setup.py`（重写）、`tta/engine/__init__.py`、`tta/cli/main.py`（改引用）
-- Delete: `tta/cards/minimal.py`、`tests/cards/test_minimal.py`、P0 失效测试（由前面任务逐个重写）
-- Test: `tests/engine/test_setup.py`（重写）
+- Modify: `tta/engine/setup.py`（重写）、`tta/engine/__init__.py`、`tta/cli/main.py`（恢复 selfplay，改用正式牌库）
+- Test: `tests/engine/test_setup.py`（重写）、`tests/cli/test_cli.py`（重建）
 
 **Interfaces:**
 - `new_game(db, num_players, seed)`:A 堆 20 张洗匀发 13 张牌列（余 7 张为当前牌堆）,I/II/III 堆按人数组牌洗匀入 future_decks；玩家：黄点 18 银行 + 1 池 + 6 初始工人（农业 2/铜矿 2/哲学 1/战士 1)、蓝点 16、政府 despotism；第一回合行动点：座位 i → 白点 i+1、红点 0
