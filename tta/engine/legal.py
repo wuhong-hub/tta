@@ -9,6 +9,11 @@ legal_actions(db, state) 枚举当前玩家的全部合法动作:
 
 pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0)。
 回合修饰(turn_discounts): 目前仅兵种的 "unit_build" 建造折扣。
+
+领袖钩子(Task 9): hammurabi 拿领袖牌 -1 白点; hammurabi 红点垫付白点
+(SIMPLIFICATION, 仅 TakeCard/DevelopTech/Build/Upgrade 四处挂钩, 见
+effects.flexible_actions); frugality 等行动卡的额外打出条件经
+effects.PLAY_CONDITIONS 预判。
 """
 
 from tta.engine import effects
@@ -41,7 +46,7 @@ from tta.engine.state import GameState, PendingEffect, PlayerState
 ROW_COSTS: tuple[int, ...] = (1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3)
 """卡牌列各位置拿牌白点费(0-4 号位 1 点, 5-9 号位 2 点, 10-12 号位 3 点)."""
 
-UNIT_BUILD_DISCOUNT_KEY = "unit_build"
+UNIT_BUILD_DISCOUNT_KEY = effects.UNIT_BUILD_DISCOUNT_KEY
 """turn_discounts 中兵种建造折扣的键(回合修饰类行动卡写入)."""
 
 
@@ -71,7 +76,11 @@ def _take_card_legal(
     cost = ROW_COSTS[row_index]
     if card.category is CardCategory.WONDER:
         cost += len(p.wonders)
-    if p.civil_actions < cost:
+    if card.category is CardCategory.LEADER:
+        # hammurabi: 拿领袖牌 -1 白点
+        cost = max(0, cost - effects.leader_take_discount(db, p))
+    # hammurabi SIMPLIFICATION: 白点不足时可用红点 1:1 垫付
+    if p.civil_actions + effects.flexible_actions(db, p) < cost:
         return False
     if card.category is CardCategory.WONDER:
         # 奇迹牌不受内政手牌上限限制; 有未完成奇迹不可再拿
@@ -98,7 +107,7 @@ def _develop_actions(db: CardDB, p: PlayerState) -> list[Action]:
         if card.category in UNIT_CATEGORIES:
             if p.military_actions >= 1:
                 actions.append(DevelopTech(card_id))
-        elif p.civil_actions >= 1:
+        elif p.civil_actions + effects.flexible_actions(db, p) >= 1:
             actions.append(DevelopTech(card_id))
     return actions
 
@@ -137,7 +146,7 @@ def _build_actions(
         if card.category in UNIT_CATEGORIES:
             if p.military_actions < point_cost:
                 continue
-        elif p.civil_actions < point_cost:
+        elif p.civil_actions + effects.flexible_actions(db, p) < point_cost:
             continue
         if p.worker_pool < 1:
             continue
@@ -186,7 +195,7 @@ def _upgrade_actions(
         if from_card.category in UNIT_CATEGORIES:
             if p.military_actions < point_cost:
                 continue
-        elif p.civil_actions < point_cost:
+        elif p.civil_actions + effects.flexible_actions(db, p) < point_cost:
             continue
         for to_id in dict.fromkeys(developed):
             if to_id == from_id:
@@ -285,6 +294,10 @@ def _action_card_actions(db: CardDB, p: PlayerState) -> list[Action]:
         # 折扣子行动类: 无合法子行动时不可打出(保证 pending 必可解)
         spec = effects.PENDING_SPECS.get(card.handler)
         if spec is not None and not _pending_actions(db, p, spec):
+            continue
+        # 额外打出条件(如 frugality 需能增人口)
+        condition = effects.PLAY_CONDITIONS.get(card.handler)
+        if condition is not None and not condition(db, p):
             continue
         actions.append(PlayActionCard(card_id))
     return actions

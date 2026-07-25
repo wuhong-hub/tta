@@ -81,6 +81,20 @@ def _spend_point(p: PlayerState, military: bool) -> PlayerState:
     return replace(p, civil_actions=p.civil_actions - 1)
 
 
+def _spend_civil(db: CardDB, p: PlayerState, cost: int) -> PlayerState:
+    """扣 cost 白点; 白点不足时经 effects.flexible_actions 用红点 1:1 垫付.
+
+    hammurabi SIMPLIFICATION: 仅 TakeCard / DevelopTech / Build / Upgrade
+    四处挂钩(与 legal 一致), 其余白点花费(PlayLeader / Destroy /
+    BuildWonderStage 等)不垫付。垫付上限由 legal 保证。
+    """
+    deficit = cost - p.civil_actions
+    if deficit <= 0:
+        return replace(p, civil_actions=p.civil_actions - cost)
+    return replace(
+        p, civil_actions=0, military_actions=p.military_actions - deficit)
+
+
 def _remove_from_hand(p: PlayerState, card_id: str) -> PlayerState:
     hand = list(p.hand_civil)
     hand.remove(card_id)
@@ -113,11 +127,17 @@ def _take_card(db: CardDB, state: GameState, action: TakeCard) -> GameState:
     row = list(state.card_row)
     row[action.row_index] = None
     state = replace(state, card_row=tuple(row))
-    p = replace(p, civil_actions=p.civil_actions - cost)
+    p = _spend_civil(db, p, cost)
     if card.category is CardCategory.WONDER:
         p = replace(p, wonder_progress=(card_id, 0))
     else:
         p = replace(p, hand_civil=p.hand_civil + (card_id,))
+    # aristotle 等领袖的拿牌即时收益(拿科技牌 +1 科技)
+    gains = effects.on_take_card_gains(db, p, card)
+    if gains:
+        p = replace(p,
+                    science=p.science + gains.get("science", 0),
+                    culture=p.culture + gains.get("culture", 0))
     return _update(state, p)
 
 
@@ -125,7 +145,10 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
     p = state.players[state.current_player]
     card = db.get(action.card_id)
     p = _remove_from_hand(p, action.card_id)
-    p = _spend_point(p, military=card.category in UNIT_CATEGORIES)
+    if card.category in UNIT_CATEGORIES:
+        p = _spend_point(p, military=True)
+    else:
+        p = _spend_civil(db, p, 1)
     p = replace(p, science=p.science - card.cost_science,
                 developed=p.developed + (action.card_id,))
     return _update(state, p)
@@ -155,7 +178,10 @@ def _build(db: CardDB, state: GameState, card_id: str) -> GameState:
     card = db.get(card_id)
     free, discount, state = _match_build_pending(state, card.category)
     if not free:
-        p = _spend_point(p, military=card.category in UNIT_CATEGORIES)
+        if card.category in UNIT_CATEGORIES:
+            p = _spend_point(p, military=True)
+        else:
+            p = _spend_civil(db, p, 1)
     cost = max(
         0, card.build_cost - discount - turn_discount_for(p, card.category))
     p = pay(db, p, "resource", cost)
@@ -170,7 +196,10 @@ def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
     to_card = db.get(action.to_card_id)
     free, discount, state = _match_build_pending(state, from_card.category)
     if not free:
-        p = _spend_point(p, military=from_card.category in UNIT_CATEGORIES)
+        if from_card.category in UNIT_CATEGORIES:
+            p = _spend_point(p, military=True)
+        else:
+            p = _spend_civil(db, p, 1)
     diff = max(0, to_card.build_cost - from_card.build_cost)
     cost = max(
         0, diff - discount - turn_discount_for(p, from_card.category))

@@ -6,7 +6,8 @@ advance(state, db) 流程:
    (is_uprising -> 跳过整个生产阶段) -> 生产(科技/文化按增速计分 ->
    腐败[资源支付, 不足用食物补, 仍不足损失到此为止] -> 食物生产 ->
    食物消耗[每缺 1 -4 文化, 文化下限 0] -> 资源生产) -> 抓军事牌
-   (P2-DEFERRED no-op) -> 恢复行动点(= civ 总值) -> 清空 turn_discounts。
+   (P2-DEFERRED no-op) -> 恢复行动点(= civ 总值) -> 重置 turn_discounts
+   (注入领袖回合修饰, 如 homer 军事建造折扣, 见 effects.turn_start_discounts)。
 2. 推进: nxt = (current+1) % 人数; nxt == 0 时: last_round -> 终局
    (terminal, final_scores = 各玩家文化, 事件计分 P2); 否则 round += 1,
    且 age 已为 IV 时 last_round = True(非起始玩家回合开启 IV -> 下一轮
@@ -27,7 +28,7 @@ advance(state, db) 流程:
 
 from dataclasses import replace
 
-from tta.engine import civ, economy
+from tta.engine import civ, economy, effects
 from tta.engine.enums import Age
 from tta.engine.model import CardDB
 from tta.engine.state import ROW_SLOTS, GameState, PlayerState, replace_player
@@ -76,12 +77,12 @@ def _end_of_turn(state: GameState, db: CardDB) -> GameState:
     # b. 起义检定: 起义则跳过整个生产阶段
     if not civ.is_uprising(db, p):
         p = _production(db, p, values)
-    # e. 恢复行动点 = civ 总值; 清空 turn_discounts
+    # e. 恢复行动点 = civ 总值; 重置 turn_discounts(注入领袖回合修饰)
     p = replace(
         p,
         civil_actions=values.civil_actions,
         military_actions=values.military_actions,
-        turn_discounts={},
+        turn_discounts=effects.turn_start_discounts(db, p),
     )
     return replace_player(state, idx, p)
 
