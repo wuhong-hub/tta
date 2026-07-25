@@ -22,8 +22,11 @@
    yellow_bank ∈ [0, 18], blue_bank ∈ [0, 蓝点上界], card_tokens ≥ 0。
 4. 卡牌守恒: 牌列 + 当前牌堆 + future_decks + 弃牌堆 + removed
    + 各玩家(手牌 + developed + 政府 + 场上领袖 + 进行中/完成奇迹)
-   ≡ 牌库全集(multiset; buildings/card_tokens 的键均 ⊆ developed,
-   不重复计数; 领袖弃置入弃牌堆、政府更替入弃牌堆、过期入 removed)。
+   + 军事域(military_deck + future_military_decks + military_discard
+   + current_events/future_events/past_events + 各玩家军事手牌)
+   ≡ 牌库全集(内政 + 军事, multiset; buildings/card_tokens 的键均 ⊆
+   developed, 不重复计数; 领袖弃置入弃牌堆、政府更替入弃牌堆、过期入
+   removed; 时代 A 事件堆余量与旧军事牌堆余牌入 removed)。
 5. 序列化往返: 每 10 步 from_dict(to_dict(state)) == state。
 6. state_hash 链: 同 seed 两次逐步走, 每步 hash 相等(见独立测试)。
 """
@@ -36,7 +39,7 @@ import pytest
 from tta.cards import build_card_db
 from tta.engine.actions import DevelopTech
 from tta.engine.apply import apply
-from tta.engine.enums import Age
+from tta.engine.enums import Age, DeckType
 from tta.engine.legal import legal_actions
 from tta.engine.setup import new_game
 from tta.engine.state import (
@@ -75,10 +78,11 @@ def db():
 
 
 def _universe(db, num_players: int) -> Counter:
-    """牌库全集 multiset: 各时代牌堆 + 每玩家初始科技/政体."""
+    """牌库全集 multiset: 各时代内政/军事牌堆 + 每玩家初始科技/政体."""
     universe: Counter = Counter()
     for age in (Age.A, Age.I, Age.II, Age.III):
         universe.update(db.deck_for(age, num_players))
+        universe.update(db.deck_for(age, num_players, DeckType.MILITARY))
     for _ in range(num_players):
         universe.update(db.initial_tableau)
         universe.update([db.initial_government])
@@ -94,6 +98,14 @@ def _accounted(state: GameState) -> Counter:
         accounted.update(deck)
     accounted.update(state.discard)
     accounted.update(state.removed)
+    # 军事域: 牌堆/未来牌堆/弃牌堆/事件堆
+    accounted.update(state.military_deck)
+    for deck in state.future_military_decks.values():
+        accounted.update(deck)
+    accounted.update(state.military_discard)
+    accounted.update(state.current_events)
+    accounted.update(state.future_events)
+    accounted.update(state.past_events)
     for p in state.players:
         accounted.update(p.hand_civil)
         accounted.update(p.hand_military)

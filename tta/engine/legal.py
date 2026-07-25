@@ -33,6 +33,7 @@ from tta.engine.actions import (
     DevelopGovernment,
     DevelopTech,
     Disband,
+    DiscardMilitary,
     IncreasePopulation,
     PassTurn,
     PlayActionCard,
@@ -320,6 +321,11 @@ def _pending_actions(
         return _wonder_actions(db, p, point_cost=0, discount=pending.discount)
     if pending.kind == effects.KIND_DEVELOP_TECH:
         return _develop_tech_pending_actions(db, p)
+    if pending.kind == effects.KIND_DISCARD_MILITARY:
+        # 回合末弃多余军事牌: 逐张选择直到合规。
+        # 法律兜底: 超上限时手牌必非空, 故恒有 DiscardMilitary 可用
+        return [DiscardMilitary(card_id)
+                for card_id in dict.fromkeys(p.hand_military)]
     return []
 
 

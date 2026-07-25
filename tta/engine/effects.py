@@ -189,6 +189,8 @@ KIND_BUILD_URBAN = "build_urban"
 KIND_WONDER_STAGE = "wonder_stage"
 KIND_DEVELOP_TECH = "develop_tech"
 KIND_UPGRADE_FARM_MINE_URBAN = "upgrade_farm_mine_urban"
+KIND_DISCARD_MILITARY = "discard_military"
+"""回合末弃多余军事牌 pending(turn.py 压入, context["count"] = 需弃数量)."""
 
 PENDING_BUILD_CATEGORIES: dict[str, frozenset[CardCategory]] = {
     KIND_BUILD_FARM_MINE: frozenset({CardCategory.FARM, CardCategory.MINE}),

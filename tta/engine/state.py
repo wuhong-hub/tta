@@ -51,7 +51,7 @@ class PlayerState:
     card_tokens: dict[str, int] = field(default_factory=dict)
     developed: tuple[str, ...] = ()
     hand_civil: tuple[str, ...] = ()
-    hand_military: tuple[str, ...] = ()         # P2-DEFERRED: 恒空
+    hand_military: tuple[str, ...] = ()      # 军事手牌(回合末抓取, 见 turn)
     government: str = "despotism"
     leader: str | None = None
     leader_ages: tuple[str, ...] = ()

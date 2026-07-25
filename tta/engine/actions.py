@@ -89,6 +89,13 @@ class SkipPolitics:
 
 
 @dataclass(frozen=True)
+class DiscardMilitary:
+    """弃 1 张军事手牌入军事弃牌堆(响应回合末 discard_military pending)."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
 class PassTurn:
     """结束本回合行动阶段(回合推进见 Task 8)."""
 
@@ -96,7 +103,7 @@ class PassTurn:
 Action = (
     TakeCard | DevelopTech | DevelopGovernment | Build | Upgrade | Destroy
     | Disband | PlayLeader | BuildWonderStage | PlayActionCard
-    | IncreasePopulation | SkipPolitics | PassTurn
+    | IncreasePopulation | SkipPolitics | DiscardMilitary | PassTurn
 )
 
 _ACTION_TYPES: dict[str, type] = {
@@ -112,6 +119,7 @@ _ACTION_TYPES: dict[str, type] = {
     "play_action_card": PlayActionCard,
     "increase_population": IncreasePopulation,
     "skip_politics": SkipPolitics,
+    "discard_military": DiscardMilitary,
     "pass": PassTurn,
 }
 _TYPE_NAMES: dict[type, str] = {v: k for k, v in _ACTION_TYPES.items()}

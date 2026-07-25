@@ -20,6 +20,7 @@ from tta.engine.actions import (
     DevelopGovernment,
     DevelopTech,
     Disband,
+    DiscardMilitary,
     IllegalActionError,
     IncreasePopulation,
     PassTurn,
@@ -72,6 +73,8 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return _build_wonder_stage(db, state)
     if isinstance(action, PlayActionCard):
         return _play_action_card(db, state, action)
+    if isinstance(action, DiscardMilitary):
+        return _discard_military(state, action)
     if isinstance(action, IncreasePopulation):
         return _increase_population(db, state)
     msg = f"未知动作类型: {action!r}"  # pragma: no cover
@@ -361,6 +364,31 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
                     blue_bank=p.blue_bank + len(stages))
     else:
         p = replace(p, wonder_progress=(card_id, stages_done))
+    return _update(state, idx, p)
+
+
+def _discard_military(state: GameState, action: DiscardMilitary) -> GameState:
+    """弃 1 张军事手牌入军事弃牌堆; pending context count 递减, 归零时 pop.
+
+    行动者 = pending[0].responder(回合末超上限的玩家, 见 turn._end_of_turn)。
+    """
+    idx = acting_index(state)
+    p = state.players[idx]
+    hand = list(p.hand_military)
+    hand.remove(action.card_id)
+    p = replace(p, hand_military=tuple(hand))
+    state = replace(
+        state, military_discard=state.military_discard + (action.card_id,))
+    pending = state.pending[0]
+    count = int(pending.context.get("count", 1)) - 1
+    if count <= 0:
+        state = replace(state, pending=state.pending[1:])
+    else:
+        context = dict(pending.context)
+        context["count"] = count
+        state = replace(
+            state, pending=(replace(pending, context=context),)
+            + state.pending[1:])
     return _update(state, idx, p)
 
 

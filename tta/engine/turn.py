@@ -2,11 +2,14 @@
 
 advance(state, db) 流程:
 
-1. 回合末阶段(当前玩家): 弃多余军事牌(P2-DEFERRED no-op) -> 起义检定
+1. 回合末阶段(当前玩家): 弃多余军事牌(军事手牌上限 = civ 军事行动点
+   + military_hand_extra, 超出部分压入 discard_military pending, 由刚结束
+   回合的玩家响应, 逐张 DiscardMilitary 弃至合规) -> 起义检定
    (is_uprising -> 跳过整个生产阶段) -> 生产(科技/文化按增速计分 ->
    腐败[资源支付, 不足用食物补, 仍不足损失到此为止] -> 食物生产 ->
    食物消耗[每缺 1 -4 文化, 文化下限 0] -> 资源生产) -> 抓军事牌
-   (P2-DEFERRED no-op) -> 恢复行动点(= civ 总值) -> 重置 turn_discounts
+   (min(剩余红点, 3) 张; 牌堆空则切洗军事弃牌堆重置牌堆, 弃牌堆也空则
+   抓不到; 时代 IV 不抓) -> 恢复行动点(= civ 总值) -> 重置 turn_discounts
    (注入领袖回合修饰, 如 homer 军事建造折扣, 见 effects.turn_start_discounts)。
 2. 推进: nxt = (current+1) % 人数; nxt == 0 时: last_round -> 终局
    (terminal, final_scores = 各玩家文化, 事件计分 P2); 否则 round += 1,
@@ -25,6 +28,9 @@ advance(state, db) 流程:
      每人 yellow_bank -2, 下限 0), 再停止补牌; 时代 IV 无牌堆但回合开始仍
      弃最左 N 张并左移, 右侧空位保持空;
      起始玩家回合开启 IV -> 本轮为最后一轮, 否则下一轮为最后一轮。
+   - 时代更替(A->I/I->II/II->III/III->IV)同步更替军事牌堆: 旧军事牌堆
+     余牌放回盒中(入 removed, 军事弃牌堆保留), 从 future_military_decks
+     弹出新时代军事堆(开局已洗匀); 时代 IV military_deck 清空。
 """
 
 from dataclasses import replace
@@ -32,7 +38,14 @@ from dataclasses import replace
 from tta.engine import civ, economy, effects
 from tta.engine.enums import Age, Phase
 from tta.engine.model import CardDB
-from tta.engine.state import ROW_SLOTS, GameState, PlayerState, replace_player
+from tta.engine.rng import rng_shuffle
+from tta.engine.state import (
+    ROW_SLOTS,
+    GameState,
+    PendingEffect,
+    PlayerState,
+    replace_player,
+)
 from tta.engine.tracks import consumption_value, corruption_value
 
 DISCARD_BY_PLAYERS = {2: 3, 3: 2, 4: 1}
@@ -43,6 +56,9 @@ FOOD_SHORTAGE_CULTURE_PENALTY = 4
 
 AGE_END_YELLOW_LOSS = 2
 """时代结束时每位玩家损失的黄点."""
+
+MAX_MILITARY_DRAW = 3
+"""回合末抓军事牌上限(官方规则: 至多 3 张)."""
 
 _AGE_ORDER = (Age.A, Age.I, Age.II, Age.III, Age.IV)
 
@@ -81,11 +97,22 @@ def advance(state: GameState, db: CardDB) -> GameState:
 def _end_of_turn(state: GameState, db: CardDB) -> GameState:
     idx = state.current_player
     p = state.players[idx]
-    # a. 弃多余军事牌: P2-DEFERRED(军事手牌恒空) no-op
     values = civ.civ_values(db, p)
+    # a. 弃多余军事牌: 手牌 > civ 军事行动点 + military_hand_extra ->
+    # discard_military pending(responder = 刚结束回合的玩家; 官方回合结束
+    # 阶段顺序: 弃置多余的军事牌 -> 起义检定 -> 生产 -> 抓取军事牌。
+    # pending 由响应者在回合推进后异步结算, 需弃数量已固化于 context)
+    hand_limit = values.military_actions + values.military_hand_extra
+    excess = len(p.hand_military) - hand_limit
+    if excess > 0:
+        state = replace(state, pending=state.pending + (PendingEffect(
+            effects.KIND_DISCARD_MILITARY, 0,
+            responder=idx, context={"count": excess}),))
     # b. 起义检定: 起义则跳过整个生产阶段
     if not civ.is_uprising(db, p):
         p = _production(db, p, values)
+    # d. 抓军事牌: min(剩余红点, 3); 时代 IV 不抓
+    state, p = _draw_military(state, p)
     # e. 恢复行动点 = civ 总值; 重置 turn_discounts(注入领袖回合修饰)
     p = replace(
         p,
@@ -94,6 +121,35 @@ def _end_of_turn(state: GameState, db: CardDB) -> GameState:
         turn_discounts=effects.turn_start_discounts(db, p),
     )
     return replace_player(state, idx, p)
+
+
+def _draw_military(
+    state: GameState, p: PlayerState,
+) -> tuple[GameState, PlayerState]:
+    """回合末抓军事牌: min(剩余红点, 3) 张从 military_deck 顶抓入手.
+
+    官方规则(规则书 p7): 抓到军事牌堆最后一张时, 切洗当前时代的军事
+    弃牌堆重置牌堆继续抓; 弃牌堆也空则抓不到。时代 IV 无军事牌堆, 不抓。
+    """
+    if state.age is Age.IV:
+        return state, p
+    count = min(p.military_actions, MAX_MILITARY_DRAW)
+    if count <= 0:
+        return state, p
+    deck = list(state.military_deck)
+    discard = list(state.military_discard)
+    hand = list(p.hand_military)
+    rng = state.rng_state
+    for _ in range(count):
+        if not deck:
+            if not discard:
+                break
+            rng, deck = rng_shuffle(rng, discard)
+            discard = []
+        hand.append(deck.pop(0))
+    state = replace(state, military_deck=tuple(deck),
+                    military_discard=tuple(discard), rng_state=rng)
+    return state, replace(p, hand_military=tuple(hand))
 
 
 def _production(db: CardDB, p: PlayerState, values: civ.CivValues) -> PlayerState:
@@ -235,11 +291,18 @@ def _end_age(state: GameState, db: CardDB) -> GameState:
     removed, discard, players = _age_end_cleanup(state, db, ended)
     future = dict(state.future_decks)
     new_deck = future.pop(new_age.value, ())
+    # 军事牌堆更替: 旧军事牌堆余牌放回盒中(入 removed, 军事弃牌堆保留),
+    # 启用新时代军事堆(开局已洗匀)
+    removed += state.military_deck
+    future_military = dict(state.future_military_decks)
+    new_military_deck = future_military.pop(new_age.value, ())
     return replace(
         state,
         age=new_age,
         civil_deck=new_deck,
         future_decks=future,
+        military_deck=new_military_deck,
+        future_military_decks=future_military,
         removed=removed,
         discard=discard,
         players=players,
@@ -263,7 +326,9 @@ def _enter_age_four(state: GameState, db: CardDB) -> GameState:
         state,
         age=Age.IV,
         civil_deck=(),
-        removed=removed,
+        # 时代 IV 无军事牌堆: 旧军事牌堆余牌放回盒中(入 removed)
+        military_deck=(),
+        removed=removed + state.military_deck,
         discard=discard,
         players=players,
         last_round=last_round,
