@@ -123,9 +123,17 @@ def _increase_population(state: GameState, idx: int, p: PlayerState) -> GameStat
     return replace_player(state, idx, p)
 
 
+KNOWN_GAINS_KEYS = frozenset({"food", "materials", "science", "culture"})
+
+
 def _play_action_card(state: GameState, idx: int, p: PlayerState,
                       a: PlayActionCard, db: CardDB) -> GameState:
     card = db.get(a.card_id)
+    unknown = card.gains.keys() - KNOWN_GAINS_KEYS
+    if unknown:
+        raise ValueError(
+            f"action card {a.card_id} has unknown gains keys: {sorted(unknown)}"
+        )
     hand = list(p.hand_civil)
     hand.remove(a.card_id)
     p = replace(p, civil_actions=p.civil_actions - 1, hand_civil=tuple(hand),

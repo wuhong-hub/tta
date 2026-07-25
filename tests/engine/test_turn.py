@@ -105,6 +105,19 @@ def test_age_transition_on_empty_deck() -> None:
     assert "I" not in s.future_decks
 
 
+def test_age_skips_empty_middle_deck() -> None:
+    # A 堆空、I 堆空、II 有牌: 推进后 age 跳到 II, 牌列补 II 的牌
+    row = ("swordsmen",) + (None,) * 12
+    p0 = _farmer()
+    s = apply(_state((p0,), card_row=row, civil_deck=(),
+                     future_decks={"I": (), "II": ("religion", "bronze")}),
+              PassTurn(), _db())
+    assert s.age is Age.II
+    assert s.removed == ("swordsmen",)
+    assert s.card_row[0] == "religion" and s.card_row[1] == "bronze"
+    assert "I" not in s.future_decks and "II" not in s.future_decks
+
+
 def test_last_round_then_terminal() -> None:
     p0 = _farmer(culture=10)
     # III 时代且牌堆已空: 本轮结束后终局

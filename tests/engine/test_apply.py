@@ -127,6 +127,22 @@ def test_play_action_card_gains_and_discards() -> None:
     assert s.discard == ("harvest_a",)
 
 
+def test_play_action_card_unknown_gains_key_fails() -> None:
+    # gains 含未知键(如 happiness)时必须 fail-loud, 不得静默忽略
+    db = _db()
+    bad = CardDefinition(id="bad_action", name="坏卡", age=Age.A,
+                         deck=DeckType.CIVIL, category=CardCategory.ACTION,
+                         gains={"happiness": 1})
+    db = CardDB(cards={**db.cards, "bad_action": bad},
+                civil_decks=db.civil_decks,
+                initial_tableau=db.initial_tableau,
+                initial_government=db.initial_government)
+    p = PlayerState(name="P0", government="despotism", civil_actions=1,
+                    hand_civil=("bad_action",))
+    with pytest.raises(ValueError, match="bad_action"):
+        apply(_state(p), PlayActionCard("bad_action"), db)
+
+
 def test_apply_does_not_mutate_input() -> None:
     row = ("irrigation",) + (None,) * 12
     p = PlayerState(name="P0", government="despotism", civil_actions=2,
