@@ -9,17 +9,11 @@
    结束各 −2(turn.py AGE_END_YELLOW_LOSS)。由 state.age 推断已结束的
    时代 I/II 数: A/I -> 0, II -> 1, III/IV -> 2。引擎对 −2 做下限 0
    截断(max(0, bank − 2)), 时代结束时 yellow_bank 实际恒 ≥ 2, 等号成立。
-2. 蓝点上界(每人): blue_bank + Σ card_tokens + 进行中奇迹已付阶段数
-   ≤ 16 + 3 × (已研发 justice_system + civil_service 数), 且 ≥ 0。
-   口径说明(引擎实际行为, 与官方规则存在偏差, 详见 Task 14 报告):
-   - 官方规则: 支付(建造/升级/增人口/食物消耗/腐败)所花蓝点退回
-     blue_bank, 奇迹完成时其上蓝点也退回 blue_bank, 总量守恒 = 16
-     (+ justice_system / civil_service 各 +3);
-   - 引擎实际: economy.pay / settle_loss 销毁所花蓝点(不退回
-     blue_bank), apply._build_wonder_stage 奇迹完成时不退回已付阶段
-     蓝点; 故蓝点总量单调递减, 仅 justice_system / civil_service
-     研发 +3 可回升。本断言按引擎实际行为建模(上界 + 非负),
-     官方偏差已在报告中登记, 不在此硬修。
+2. 蓝点守恒(每人, 精确等号): blue_bank + Σ card_tokens + 进行中奇迹
+   已付阶段数 == 16 + 3 × (已研发 justice_system + civil_service 数)。
+   官方规则: 支付(建造/升级/增人口/食物消耗/腐败)所花蓝点放回
+   blue_bank, 奇迹完成时其上蓝点也放回 blue_bank, 总量守恒 = 16
+   (+ justice_system / civil_service 研发各从盒中 +3)。
 3. 资源非负: culture / science / civil_actions / military_actions ≥ 0,
    yellow_bank ∈ [0, 18], blue_bank ∈ [0, 蓝点上界], card_tokens ≥ 0。
 4. 卡牌守恒: 牌列 + 当前牌堆 + future_decks + 弃牌堆 + removed
@@ -137,10 +131,9 @@ def _assert_player_invariants(db, state: GameState, p: PlayerState) -> None:
         f"{p.name} 黄点不守恒: {_yellow_total(p)} != "
         f"{_yellow_expected(state.age)} (age={state.age})"
     )
-    # 蓝点上界 + 非负(引擎销毁式支付的实际行为建模, 见模块 docstring)
-    assert 0 <= _blue_total(p) <= _blue_ceiling(db, p), (
-        f"{p.name} 蓝点越界: {_blue_total(p)} 不在 "
-        f"[0, {_blue_ceiling(db, p)}]"
+    # 蓝点精确守恒(支付/消耗/腐败/奇迹完成均放回供给区, 见模块 docstring)
+    assert _blue_total(p) == _blue_ceiling(db, p), (
+        f"{p.name} 蓝点不守恒: {_blue_total(p)} != {_blue_ceiling(db, p)}"
     )
     # 资源/行动点非负, 银行区间
     assert p.culture >= 0

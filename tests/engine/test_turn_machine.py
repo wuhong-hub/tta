@@ -122,9 +122,10 @@ def test_corruption_paid_resource_then_food() -> None:
     )
     new = turn.advance(_state(players=(p0, _player("P1"))), _db())
     q = new.players[0]
-    # bronze 3 点全部付腐败, agriculture 付 1; 资源生产 bronze 1 工人 +1 蓝点
+    # bronze 3 点全部付腐败, agriculture 付 1; 支付蓝点放回供给区
+    # (4+3+1=8), 资源生产 bronze 1 工人从供给区取 1 蓝点 (8-1=7)
     assert q.card_tokens == {"agriculture": 1, "bronze": 1}
-    assert q.blue_bank == 3
+    assert q.blue_bank == 7
 
 
 def test_corruption_unpayable_loss_capped_no_negative() -> None:

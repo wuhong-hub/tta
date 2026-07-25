@@ -288,7 +288,8 @@ def test_engineering_genius_wonder_stage() -> None:
     assert new2.pending == ()
     assert p2.wonder_progress == ("pyramids", 1)
     assert p2.card_tokens == {}
-    assert p2.blue_bank == 15
+    # 支付 1 蓝点放回供给区 (16+1), 再从供给区盖 1 蓝点上奇迹 (-1)
+    assert p2.blue_bank == 16
     assert p2.civil_actions == 3  # 仅打出卡扣 1 白点, 子行动不扣
 
 

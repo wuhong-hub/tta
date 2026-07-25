@@ -265,7 +265,8 @@ def test_engineering_genius_pending_flow(db: CardDB) -> None:
     p2 = new2.players[0]
     assert p2.wonder_progress == ("pyramids", 1)
     assert p2.card_tokens == {}      # 阶段费 3 - 折扣 2 = 1
-    assert p2.blue_bank == 15
+    # 支付 1 蓝点放回供给区 (16+1), 再从供给区盖 1 蓝点上奇迹 (-1)
+    assert p2.blue_bank == 16
 
 
 def test_patriotism_handler(db: CardDB) -> None:

@@ -5,11 +5,15 @@ token_value(农场=食物, 矿场=资源); 供给区为 PlayerState.blue_bank.
 
 确定性支付算法(引擎约定, 全引擎唯一支付口径):
 1. 反复从该类型卡中取 token_value 最小(并列取 card_id 字典序最小)的卡上
-   1 个蓝点, 直到累计价值 >= 应付额;
+   1 个蓝点放回供给区(blue_bank += 1), 直到累计价值 >= 应付额(官方规则:
+   支付/消耗/腐败花掉的蓝点放回蓝色供给区, 不销毁);
 2. 若超付, 找零 = 超付额: 从供给区向该类型最低等级卡(同样 token_value
-   最小、card_id 字典序并列)放蓝点, 每点抵该卡 token_value, 直到找零尽
-   或供给空; 单点价值超过剩余找零额时停止, 找不零的部分损失;
+   最小、card_id 字典序并列)放蓝点(blue_bank -= 1), 每点抵该卡 token_value,
+   直到找零尽或供给空; 单点价值超过剩余找零额时停止, 找不零的部分损失;
 3. 全程不改动入参 PlayerState, 嵌套 dict 整体复制后返回新实例.
+
+支付净效应: 卡上蓝点 -> 供给区, 找零再从供给区 -> 卡; 生产(produce)/
+gain_tokens 方向相反(供给区 -> 卡), 蓝点总量闭环守恒。
 
 生产(produce): 该类型每张有工人的卡各从供给区得 1 蓝点; 供给不足时高等级
 (token_value 降序, 并列 card_id 字典序升序)卡优先.
@@ -90,7 +94,7 @@ def pay(db: CardDB, p: PlayerState, kind: str, amount: int) -> PlayerState:
     tokens = dict(p.card_tokens)
     blue_bank = p.blue_bank
 
-    # 第 1 步: 从最低等级卡逐点取, 直到累计 >= amount
+    # 第 1 步: 从最低等级卡逐点取, 取下的蓝点放回供给区, 直到累计 >= amount
     paid = 0
     while paid < amount:
         target = min(
@@ -103,6 +107,7 @@ def pay(db: CardDB, p: PlayerState, kind: str, amount: int) -> PlayerState:
             tokens[target] = left
         else:
             del tokens[target]
+        blue_bank += 1
         paid += db.get(target).token_value
 
     # 第 2 步: 超付找零, 从供给区向最低等级卡放蓝点, 找不零的部分损失
@@ -127,8 +132,8 @@ def settle_loss(
 ) -> tuple[PlayerState, int]:
     """损失结算(腐败/消耗): 按 pay 的口径支付, 不足部分损失到此为止.
 
-    与 pay 不同, 持有量不足时不抛错: 交出全部持有, 返回实际支付数。
-    返回 (新 PlayerState, 实际支付的价值), 全程不产生负值。
+    与 pay 不同, 持有量不足时不抛错: 交出全部持有(蓝点同样放回供给区),
+    返回实际支付数。返回 (新 PlayerState, 实际支付的价值), 全程不产生负值。
     """
     total = _total(db, p, kind)
     paid = min(amount, total)

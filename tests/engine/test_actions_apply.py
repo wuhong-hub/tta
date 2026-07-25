@@ -255,8 +255,9 @@ def test_build_wonder_stage_apply() -> None:
                 blue_bank=16)
     new = apply(_state(p), BuildWonderStage(), db)
     assert new.players[0].wonder_progress == ("pyramids", 1)
+    # 支付的 3 蓝点放回供给区 (16+3), 再从供给区盖 1 蓝点上奇迹 (-1)
     assert new.players[0].card_tokens == {}
-    assert new.players[0].blue_bank == 15
+    assert new.players[0].blue_bank == 18
     assert new.players[0].civil_actions == 3
 
 
@@ -267,8 +268,10 @@ def test_build_wonder_stage_completion() -> None:
     new = apply(_state(p), BuildWonderStage(), db)
     assert new.players[0].wonder_progress is None
     assert new.players[0].wonders == ("pyramids",)
+    # 支付 2 蓝点放回供给区 (16+2), 盖 1 点上奇迹 (-1), 完成时全部
+    # 阶段蓝点退回供给区 (+2)
     assert new.players[0].card_tokens == {}
-    assert new.players[0].blue_bank == 15
+    assert new.players[0].blue_bank == 19
 
 
 def test_play_action_card_framework(monkeypatch: pytest.MonkeyPatch) -> None:

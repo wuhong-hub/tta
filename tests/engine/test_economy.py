@@ -73,55 +73,75 @@ def test_total_ignores_other_category_tokens() -> None:
 def test_pay_food_exact_from_lowest_first() -> None:
     p = _player()
     q = pay(_db(), p, "food", 1)
-    # 先取 token_value 最小的 agriculture: 2 -> 1, irrigation 不动
+    # 先取 token_value 最小的 agriculture: 2 -> 1, irrigation 不动;
+    # 取下的 1 蓝点放回供给区
     assert q.card_tokens == {"agriculture": 1, "irrigation": 1}
-    assert q.blue_bank == 16
+    assert q.blue_bank == 17
     # 入参不被改动
     assert p.card_tokens == {"agriculture": 2, "irrigation": 1}
+
+
+def test_pay_returns_spent_tokens_to_bank() -> None:
+    # 官方规则: 支付花掉的蓝点放回蓝色供给区, 不销毁
+    p = _player(card_tokens={"agriculture": 2}, blue_bank=10)
+    q = pay(_db(), p, "food", 2)
+    assert q.card_tokens == {}
+    assert q.blue_bank == 12
 
 
 def test_pay_food_three_exact_no_change() -> None:
     p = _player()
     q = pay(_db(), p, "food", 3)
-    # agriculture×2 (付2) + irrigation×1 (付2) 累计 4 >= 3? 否: 取到 2 后再取
-    # irrigation 价值 2 会超付; 算法取到累计 >= 3: 2 + 2 = 4, 超付 1, 找零 1
-    # 找零向最低等级农场 agriculture 放 1 蓝点
+    # agriculture×2 (付2) + irrigation×1 (付2) 累计 4 >= 3: 超付 1, 找零 1
+    # 3 个支付蓝点放回供给区 (16+3=19), 找零向最低等级农场 agriculture
+    # 放 1 蓝点 (19-1=18)
     assert q.card_tokens == {"agriculture": 1}
-    assert q.blue_bank == 15
+    assert q.blue_bank == 18
 
 
 def test_pay_food_four_exact_all_spent() -> None:
     p = _player()
     q = pay(_db(), p, "food", 4)
-    # 2 + 2 = 4 恰好, 无找零; 空卡槽从 card_tokens 移除
+    # 2 + 2 = 4 恰好, 无找零; 3 个支付蓝点全部放回供给区
     assert q.card_tokens == {}
-    assert q.blue_bank == 16
+    assert q.blue_bank == 19
 
 
 def test_pay_overpay_change_to_lowest_card() -> None:
     # 仅 irrigation 1 蓝点(值2), 付 1, 供给 3
     p = _player(card_tokens={"irrigation": 1}, blue_bank=3)
     q = pay(_db(), p, "food", 1)
-    # irrigation 取空; 超付 1 -> 向最低等级农场 agriculture(值1) 放 1 蓝点
+    # irrigation 取空, 蓝点放回供给区 (3+1=4); 超付 1 ->
+    # 向最低等级农场 agriculture(值1) 放 1 蓝点 (4-1=3); 净效应: 卡上不变
     assert q.card_tokens == {"agriculture": 1}
-    assert q.blue_bank == 2
+    assert q.blue_bank == 3
 
 
-def test_pay_overpay_change_lost_when_supply_empty() -> None:
+def test_pay_overpay_change_funded_by_returned_token() -> None:
+    # 供给空也可找零: 支付蓝点先放回供给区, 找零再从中取出
     p = _player(card_tokens={"irrigation": 1}, blue_bank=0)
     q = pay(_db(), p, "food", 1)
-    # 找零 1 但供给空 -> 损失, 无补偿
-    assert q.card_tokens == {}
+    assert q.card_tokens == {"agriculture": 1}
     assert q.blue_bank == 0
+
+
+def test_pay_change_lost_when_token_value_too_big() -> None:
+    # 仅研发 iron(值2): 付 resource 1 超付 1, 最低等级矿场值 2 > 找零 1,
+    # 找不零的部分损失
+    p = _player(card_tokens={"iron": 1}, blue_bank=0,
+                developed=("iron",), buildings={"mine": {"iron": 1}})
+    q = pay(_db(), p, "resource", 1)
+    assert q.card_tokens == {}
+    assert q.blue_bank == 1
 
 
 def test_pay_change_partial_loss_when_token_value_too_big() -> None:
-    # 仅 iron 1 蓝点(值2), 付 resource 1; 找零 1 < 矿场最低等级卡 bronze 值1?
-    # bronze 已研发, 值 1 <= 1, 可找零
+    # 仅 iron 1 蓝点(值2), 付 resource 1; 找零 1: 已研发 bronze 值 1 <= 1,
+    # 可找零; 支付蓝点先放回供给区 (1+1=2), 找零取出 (2-1=1)
     p = _player(card_tokens={"iron": 1}, blue_bank=1)
     q = pay(_db(), p, "resource", 1)
     assert q.card_tokens == {"bronze": 1}
-    assert q.blue_bank == 0
+    assert q.blue_bank == 1
 
 
 def test_pay_insufficient_raises() -> None:
@@ -139,6 +159,17 @@ def test_pay_invalid_kind_raises() -> None:
     p = _player()
     with pytest.raises(ValueError, match="kind"):
         pay(_db(), p, "gold", 1)
+
+
+def test_pay_conserves_blue_token_total() -> None:
+    # 蓝点总量守恒(官方规则): 支付是 卡 -> 供给区, 找零是 供给区 -> 卡,
+    # 闭环内 blue_bank + Σ card_tokens 不变(仅找不零时减少)
+    p = _player()
+    before = p.blue_bank + sum(p.card_tokens.values())
+    q = pay(_db(), p, "food", 4)
+    assert q.blue_bank + sum(q.card_tokens.values()) == before
+    r, _ = settle_loss(_db(), p, "food", 3)
+    assert r.blue_bank + sum(r.card_tokens.values()) == before
 
 
 def test_produce_high_value_first_when_supply_short() -> None:
@@ -205,12 +236,22 @@ def test_settle_loss_full_payment_equals_pay() -> None:
 
 
 def test_settle_loss_insufficient_pays_all_without_raise() -> None:
-    # 持有 4 点食物, 损失 10: 全部交出, 实际支付 4, 不产生负值不抛错
+    # 持有 4 点食物, 损失 10: 全部交出, 实际支付 4, 不产生负值不抛错;
+    # 交出的 3 蓝点全部放回供给区
     p = _player()
     q, paid = settle_loss(_db(), p, "food", 10)
     assert paid == 4
     assert q.card_tokens == {}
-    assert q.blue_bank == 16
+    assert q.blue_bank == 19
+
+
+def test_settle_loss_returns_tokens_to_bank() -> None:
+    # 腐败/消耗结算同样闭环: 花掉的蓝点放回供给区
+    p = _player(card_tokens={"bronze": 2}, blue_bank=5)
+    q, paid = settle_loss(_db(), p, "resource", 2)
+    assert paid == 2
+    assert q.card_tokens == {}
+    assert q.blue_bank == 7
 
 
 def test_settle_loss_no_tokens_returns_zero_paid() -> None:

@@ -299,7 +299,9 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
     p = replace(p, blue_bank=p.blue_bank - 1)
     stages_done += 1
     if stages_done == len(stages):
-        p = replace(p, wonders=p.wonders + (card_id,), wonder_progress=None)
+        # 官方规则: 奇迹完成时盖在阶段上的蓝点全部放回供给区
+        p = replace(p, wonders=p.wonders + (card_id,), wonder_progress=None,
+                    blue_bank=p.blue_bank + len(stages))
     else:
         p = replace(p, wonder_progress=(card_id, stages_done))
     return _update(state, p)
