@@ -1,0 +1,223 @@
+"""官方回合状态机: PassTurn 后的完整回合推进.
+
+advance(state, db) 流程:
+
+1. 回合末阶段(当前玩家): 弃多余军事牌(P2-DEFERRED no-op) -> 起义检定
+   (is_uprising -> 跳过整个生产阶段) -> 生产(科技/文化按增速计分 ->
+   腐败[资源支付, 不足用食物补, 仍不足损失到此为止] -> 食物生产 ->
+   食物消耗[每缺 1 -4 文化, 文化下限 0] -> 资源生产) -> 抓军事牌
+   (P2-DEFERRED no-op) -> 恢复行动点(= civ 总值) -> 清空 turn_discounts。
+2. 推进: nxt = (current+1) % 人数; nxt == 0 时: last_round -> 终局
+   (terminal, final_scores = 各玩家文化, 事件计分 P2); 否则 round += 1,
+   且 age 已为 IV 时 last_round = True(非起始玩家回合开启 IV -> 下一轮
+   为最后一轮)。
+3. 回合开始(nxt 玩家): round == 1 或 age == IV -> 全部跳过; 否则弃最左
+   N(2/3/4 人 -> 3/2/1)个位置的牌入 removed -> 左移紧凑 -> 补牌:
+   - 时代 A 于第一次补牌时结束: 先用 A 堆补空位, 余牌入 removed, 启用
+     I 堆继续补(无过期, 但每人 -2 黄点仍执行);
+   - 时代 I/II 于当前牌堆最后一张放上牌列时结束: 过期处理(更早时代手牌
+     入弃牌堆; 过期领袖入 removed 并清 None, leader_ages 保留; 过期未完成
+     奇迹已付阶段蓝点退回 blue_bank 后入 removed) -> 每人 yellow_bank -2
+     (下限 0) -> 启用下一时代牌堆继续补;
+   - 时代 III 牌堆尽 -> 时代 IV: 停止补牌, 此后回合开始不弃牌不补牌;
+     起始玩家回合开启 IV -> 本轮为最后一轮, 否则下一轮为最后一轮。
+"""
+
+from dataclasses import replace
+
+from tta.engine import civ, economy
+from tta.engine.enums import Age
+from tta.engine.model import CardDB
+from tta.engine.state import ROW_SLOTS, GameState, PlayerState, replace_player
+from tta.engine.tracks import consumption_value, corruption_value
+
+DISCARD_BY_PLAYERS = {2: 3, 3: 2, 4: 1}
+"""回合开始弃掉的卡牌列最左位置数(按玩家人数)."""
+
+FOOD_SHORTAGE_CULTURE_PENALTY = 4
+"""食物消耗每缺 1 点损失的文化."""
+
+AGE_END_YELLOW_LOSS = 2
+"""时代结束时每位玩家损失的黄点."""
+
+_AGE_ORDER = (Age.A, Age.I, Age.II, Age.III, Age.IV)
+
+
+def advance(state: GameState, db: CardDB) -> GameState:
+    """回合末阶段 -> 推进到下一位玩家并执行其回合开始阶段."""
+    state = _end_of_turn(state, db)
+    nxt = (state.current_player + 1) % len(state.players)
+    if nxt == 0:
+        if state.last_round:
+            # 最后一轮已完整打完 -> 终局(P1 无事件, 仅文化计分)
+            return replace(
+                state,
+                terminal=True,
+                final_scores=tuple(p.culture for p in state.players),
+            )
+        state = replace(state, round=state.round + 1)
+        if state.age is Age.IV:
+            # IV 于非起始玩家回合开启: 递增后的这一轮为最后一轮
+            state = replace(state, last_round=True)
+    state = replace(state, current_player=nxt)
+    return _start_of_turn(state, db)
+
+
+# --- 回合末阶段 -----------------------------------------------------------
+
+
+def _end_of_turn(state: GameState, db: CardDB) -> GameState:
+    idx = state.current_player
+    p = state.players[idx]
+    # a. 弃多余军事牌: P2-DEFERRED(军事手牌恒空) no-op
+    values = civ.civ_values(db, p)
+    # b. 起义检定: 起义则跳过整个生产阶段
+    if not civ.is_uprising(db, p):
+        p = _production(db, p, values)
+    # e. 恢复行动点 = civ 总值; 清空 turn_discounts
+    p = replace(
+        p,
+        civil_actions=values.civil_actions,
+        military_actions=values.military_actions,
+        turn_discounts={},
+    )
+    return replace_player(state, idx, p)
+
+
+def _production(db: CardDB, p: PlayerState, values: civ.CivValues) -> PlayerState:
+    """生产阶段: 计分 -> 腐败 -> 食物生产 -> 食物消耗 -> 资源生产."""
+    p = replace(
+        p,
+        science=p.science + values.science_rate,
+        culture=p.culture + values.culture_rate,
+    )
+    # 腐败: 资源支付, 不足部分用食物继续支付, 仍不足损失到此为止
+    amount = corruption_value(p.blue_bank)
+    if amount > 0:
+        p, paid = economy.settle_loss(db, p, "resource", amount)
+        p, _ = economy.settle_loss(db, p, "food", amount - paid)
+    # 食物生产 -> 食物消耗(每缺 1 -4 文化, 文化下限 0)
+    p = economy.produce(db, p, "food")
+    need = consumption_value(p.yellow_bank)
+    if need > 0:
+        p, paid = economy.settle_loss(db, p, "food", need)
+        missing = need - paid
+        if missing > 0:
+            p = replace(p, culture=max(
+                0, p.culture - FOOD_SHORTAGE_CULTURE_PENALTY * missing))
+    # 资源生产
+    return economy.produce(db, p, "resource")
+
+
+# --- 回合开始阶段 -----------------------------------------------------------
+
+
+def _start_of_turn(state: GameState, db: CardDB) -> GameState:
+    if state.round == 1:
+        return state  # 第一轮不补牌
+    if state.age is Age.IV:
+        return state  # 时代 IV 无牌堆: 不弃牌不补牌
+    state = _discard_and_slide(state)
+    return _refill(state, db)
+
+
+def _discard_and_slide(state: GameState) -> GameState:
+    """弃最左 N 个位置的牌入 removed, 其余左移紧凑."""
+    n = DISCARD_BY_PLAYERS[len(state.players)]
+    row = list(state.card_row)
+    removed = state.removed + tuple(c for c in row[:n] if c is not None)
+    kept = [c for c in row[n:] if c is not None]
+    kept.extend([None] * (ROW_SLOTS - len(kept)))
+    return replace(state, card_row=tuple(kept), removed=removed)
+
+
+def _refill(state: GameState, db: CardDB) -> GameState:
+    """从当前时代牌堆补满右侧空位, 处理时代结束/时代 IV."""
+    row = list(state.card_row)
+    if state.age is Age.A:
+        # 时代 A 于第一次补牌时结束: 先用 A 堆补空位, 余牌入 removed
+        deck = list(state.civil_deck)
+        for i, card_id in enumerate(row):
+            if card_id is None and deck:
+                row[i] = deck.pop(0)
+        state = _end_age(replace(state, civil_deck=tuple(deck)), db)
+    for i in range(ROW_SLOTS):
+        if state.age is Age.IV:
+            break
+        if row[i] is not None:
+            continue
+        while not state.civil_deck and state.age is not Age.IV:
+            # 牌堆已尽但仍有空位: 时代结束, 切下一时代牌堆继续补
+            state = _end_current_age(state, db)
+        if state.age is Age.IV:
+            break
+        row[i] = state.civil_deck[0]
+        state = replace(state, civil_deck=state.civil_deck[1:])
+        if not state.civil_deck:
+            # 当前牌堆最后一张已放上牌列 -> 时代结束
+            state = _end_current_age(state, db)
+    return replace(state, card_row=tuple(row))
+
+
+def _end_current_age(state: GameState, db: CardDB) -> GameState:
+    if state.age is Age.III:
+        return _enter_age_four(state)
+    return _end_age(state, db)
+
+
+def _end_age(state: GameState, db: CardDB) -> GameState:
+    """时代 A/I/II 结束: 余牌移除 -> 过期处理 -> 每人 -2 黄点 -> 启用新牌堆."""
+    ended = state.age
+    new_age = ended.next()
+    if new_age is None:  # pragma: no cover - III 由 _enter_age_four 处理
+        msg = "时代 III 的结束应走 _enter_age_four"
+        raise AssertionError(msg)
+    # 当前牌堆余牌入 removed(时代 A 结束的核心; I/II 结束时牌堆已空)
+    removed = state.removed + state.civil_deck
+    discard = state.discard
+    players: list[PlayerState] = []
+    for p in state.players:
+        # 过期手牌(时代早于刚结束时代)入弃牌堆
+        kept: list[str] = []
+        for card_id in p.hand_civil:
+            if _is_obsolete(db, card_id, ended):
+                discard += (card_id,)
+            else:
+                kept.append(card_id)
+        p = replace(p, hand_civil=tuple(kept))
+        # 过期领袖入 removed 并清 None(leader_ages 保留)
+        if p.leader is not None and _is_obsolete(db, p.leader, ended):
+            removed += (p.leader,)
+            p = replace(p, leader=None)
+        # 过期未完成奇迹: 已付阶段蓝点退回 blue_bank, 奇迹入 removed
+        if p.wonder_progress is not None:
+            wonder_id, stages_done = p.wonder_progress
+            if _is_obsolete(db, wonder_id, ended):
+                removed += (wonder_id,)
+                p = replace(p, blue_bank=p.blue_bank + stages_done,
+                            wonder_progress=None)
+        # 每人 -2 黄点(下限 0)
+        players.append(replace(
+            p, yellow_bank=max(0, p.yellow_bank - AGE_END_YELLOW_LOSS)))
+    future = dict(state.future_decks)
+    new_deck = future.pop(new_age.value, ())
+    return replace(
+        state,
+        age=new_age,
+        civil_deck=new_deck,
+        future_decks=future,
+        removed=removed,
+        discard=discard,
+        players=tuple(players),
+    )
+
+
+def _is_obsolete(db: CardDB, card_id: str, ended: Age) -> bool:
+    """过期 = 卡牌时代早于刚结束的时代(刚结束时代的卡本身不过期)."""
+    return _AGE_ORDER.index(db.get(card_id).age) < _AGE_ORDER.index(ended)
+
+
+def _enter_age_four(state: GameState) -> GameState:
+    """时代 III 牌堆尽 -> 时代 IV: 停止补牌; 起始玩家回合开启则本轮为最后轮."""
+    last_round = state.last_round or state.current_player == 0
+    return replace(state, age=Age.IV, civil_deck=(), last_round=last_round)

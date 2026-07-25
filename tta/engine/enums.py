@@ -4,15 +4,16 @@ from enum import Enum
 
 
 class Age(Enum):
-    """时代."""
+    """时代. IV 为终局标记时代(无牌堆), 不参与卡牌年龄比较与 next()."""
 
     A = "A"
     I = "I"  # noqa: E741
     II = "II"
     III = "III"
+    IV = "IV"
 
     def next(self) -> "Age | None":
-        """返回下一时代, III 之后为 None."""
+        """返回下一时代, III 之后为 None(IV 仅为状态标记)."""
         order = (Age.A, Age.I, Age.II, Age.III)
         idx = order.index(self)
         return order[idx + 1] if idx + 1 < len(order) else None

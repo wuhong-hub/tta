@@ -103,9 +103,14 @@ def _state(player: PlayerState, card_row: tuple[str | None, ...] | None = None,
     return GameState(**base)
 
 
-def test_pass_turn_not_implemented() -> None:
-    with pytest.raises(NotImplementedError, match="Task 8"):
-        apply(_state(_player()), PassTurn(), _db())
+def test_pass_turn_advances_turn() -> None:
+    # Task 8 起 PassTurn 交由 turn.advance 执行官方回合推进
+    state = _state(_player(civil_actions=1, military_actions=0))
+    new = apply(state, PassTurn(), _db())
+    assert new.current_player == 1
+    # 行动点恢复为 civ 总值
+    assert new.players[0].civil_actions == 4
+    assert new.players[0].military_actions == 2
 
 
 def test_illegal_action_raises() -> None:

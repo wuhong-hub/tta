@@ -122,6 +122,21 @@ def pay(db: CardDB, p: PlayerState, kind: str, amount: int) -> PlayerState:
     return replace(p, card_tokens=tokens, blue_bank=blue_bank)
 
 
+def settle_loss(
+    db: CardDB, p: PlayerState, kind: str, amount: int,
+) -> tuple[PlayerState, int]:
+    """损失结算(腐败/消耗): 按 pay 的口径支付, 不足部分损失到此为止.
+
+    与 pay 不同, 持有量不足时不抛错: 交出全部持有, 返回实际支付数。
+    返回 (新 PlayerState, 实际支付的价值), 全程不产生负值。
+    """
+    total = _total(db, p, kind)
+    paid = min(amount, total)
+    if paid <= 0:
+        return p, 0
+    return pay(db, p, kind, paid), paid
+
+
 def gain_tokens(db: CardDB, p: PlayerState, kind: str, count: int) -> PlayerState:
     """从供给区向该类型最低等级卡放 count 个蓝点.
 

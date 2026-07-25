@@ -2,7 +2,14 @@
 
 import pytest
 
-from tta.engine.economy import food_total, gain_tokens, pay, produce, resource_total
+from tta.engine.economy import (
+    food_total,
+    gain_tokens,
+    pay,
+    produce,
+    resource_total,
+    settle_loss,
+)
 from tta.engine.enums import Age, CardCategory, DeckType
 from tta.engine.model import CardDB, CardDefinition
 from tta.engine.state import PlayerState
@@ -187,3 +194,39 @@ def test_gain_tokens_no_card_noop() -> None:
 def test_gain_tokens_invalid_kind_raises() -> None:
     with pytest.raises(ValueError, match="kind"):
         gain_tokens(_db(), _player(), "gold", 1)
+
+
+def test_settle_loss_full_payment_equals_pay() -> None:
+    # 持有足够时与 pay 一致, 实际支付 = 应付
+    p = _player()
+    q, paid = settle_loss(_db(), p, "food", 3)
+    assert paid == 3
+    assert q == pay(_db(), p, "food", 3)
+
+
+def test_settle_loss_insufficient_pays_all_without_raise() -> None:
+    # 持有 4 点食物, 损失 10: 全部交出, 实际支付 4, 不产生负值不抛错
+    p = _player()
+    q, paid = settle_loss(_db(), p, "food", 10)
+    assert paid == 4
+    assert q.card_tokens == {}
+    assert q.blue_bank == 16
+
+
+def test_settle_loss_no_tokens_returns_zero_paid() -> None:
+    p = _player(card_tokens={})
+    q, paid = settle_loss(_db(), p, "resource", 4)
+    assert paid == 0
+    assert q == p
+
+
+def test_settle_loss_zero_amount_noop() -> None:
+    p = _player()
+    q, paid = settle_loss(_db(), p, "resource", 0)
+    assert paid == 0
+    assert q == p
+
+
+def test_settle_loss_invalid_kind_raises() -> None:
+    with pytest.raises(ValueError, match="kind"):
+        settle_loss(_db(), _player(), "gold", 1)

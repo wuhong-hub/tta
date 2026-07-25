@@ -2,12 +2,12 @@
 
 apply(state, action, db) 返回新 GameState, 不改动入参(嵌套 dict 整体复制)。
 合法性统一经 legal_actions 成员判定; 非法动作抛 IllegalActionError。
-回合推进(补牌/行动点重置/生产结算)属 Task 8, PassTurn 暂为占位。
+PassTurn 交由 turn.advance 执行官方回合推进(见 tta/engine/turn.py)。
 """
 
 from dataclasses import replace
 
-from tta.engine import effects
+from tta.engine import effects, turn
 from tta.engine.actions import (
     Action,
     Build,
@@ -33,11 +33,14 @@ from tta.engine.state import GameState, PlayerState, replace_player
 def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     """应用动作并返回新状态; 非法动作抛 IllegalActionError."""
     if isinstance(action, PassTurn):
-        if state.pending and not state.terminal:
+        if state.terminal:
+            msg = "游戏已结束, 无合法动作"
+            raise IllegalActionError(msg)
+        if state.pending:
             # SIMPLIFICATION: 官方行动卡效果为强制; 引擎允许 PassTurn 放弃
-            # pending(仅丢弃, 回合推进仍由 Task 8 实现)。
-            return replace(state, pending=())
-        raise NotImplementedError("Task 8")
+            # pending(仅丢弃), 随后正常落入回合推进逻辑。
+            state = replace(state, pending=())
+        return turn.advance(state, db)
     if state.terminal:
         msg = "游戏已结束, 无合法动作"
         raise IllegalActionError(msg)
