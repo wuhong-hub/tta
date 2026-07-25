@@ -166,7 +166,16 @@ def test_first_round_only_take_card() -> None:
     state = _state(_player(), card_row=_row(*(["bronze"] * ROW_SLOTS)), round=1)
     actions = legal_actions(_db(), state)
     assert actions
-    assert all(isinstance(a, TakeCard) for a in actions)
+    assert all(isinstance(a, TakeCard) for a in actions[:-1])
+    assert actions[-1] == PassTurn()
+    assert actions.count(PassTurn()) == 1
+
+
+def test_first_round_no_white_point_can_pass() -> None:
+    # 第一回合白点耗尽: 无任何 TakeCard, 但必须能 PassTurn 避免卡死
+    state = _state(_player(civil_actions=0),
+                   card_row=_row(*(["bronze"] * ROW_SLOTS)), round=1)
+    assert legal_actions(_db(), state) == [PassTurn()]
 
 
 def test_pass_turn_appended_last() -> None:

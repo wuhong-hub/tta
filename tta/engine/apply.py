@@ -1,6 +1,6 @@
 """动作应用(官方规则 P1).
 
-apply(db, state, action) 返回新 GameState, 不改动入参(嵌套 dict 整体复制)。
+apply(state, action, db) 返回新 GameState, 不改动入参(嵌套 dict 整体复制)。
 合法性统一经 legal_actions 成员判定; 非法动作抛 IllegalActionError。
 回合推进(补牌/行动点重置/生产结算)属 Task 8, PassTurn 暂为占位。
 """
@@ -30,7 +30,7 @@ from tta.engine.model import CardDB
 from tta.engine.state import GameState, PlayerState, replace_player
 
 
-def apply(db: CardDB, state: GameState, action: Action) -> GameState:
+def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     """应用动作并返回新状态; 非法动作抛 IllegalActionError."""
     if isinstance(action, PassTurn):
         raise NotImplementedError("Task 8")

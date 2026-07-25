@@ -2,7 +2,7 @@
 
 legal_actions(db, state) 枚举当前玩家的全部合法动作:
 - 终局 -> []; pending 非空 -> 仅 [PassTurn](Task 7 改为结算 pending);
-- 第一回合(state.round == 1) -> 仅 TakeCard;
+- 第一回合(state.round == 1) -> 仅 TakeCard + 末尾 PassTurn;
 - 其余情况: TakeCard / DevelopTech / DevelopGovernment / Build / Upgrade /
   Destroy / Disband / PlayLeader / BuildWonderStage / PlayActionCard,
   PassTurn 恒在末尾。
@@ -247,6 +247,8 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
         if card_id is not None and _take_card_legal(db, p, i, card_id)
     ]
     if state.round == 1:
+        # 第一回合仅能拿牌, 但 PassTurn 恒在末尾(白点耗尽时不致卡死)
+        takes.append(PassTurn())
         return takes
     actions: list[Action] = takes
     actions.extend(_develop_actions(db, p))
