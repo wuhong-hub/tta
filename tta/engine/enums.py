@@ -58,6 +58,13 @@ class CardCategory(Enum):
     WONDER = "wonder"
     ACTION = "action"
     SPECIAL = "special"
+    EVENT = "event"
+    AGGRESSION = "aggression"
+    WAR = "war"
+    PACT = "pact"
+    TACTICS = "tactics"
+    BONUS = "bonus"
+    TERRITORY = "territory"
 
 
 URBAN_CATEGORIES = frozenset({

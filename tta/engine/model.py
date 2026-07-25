@@ -48,6 +48,17 @@ class CardDefinition:
     wonder_bonus: dict[str, int] = field(default_factory=dict)  # 奇迹完成后静态文明加成
     handler: str = ""                     # effects.py 特殊效果处理器名, 空=无
     quantities: tuple[int, int, int] = (0, 0, 0)  # (2p, 3p, 4p) 张数
+    military_cost: int = 0                # 侵略/战争: 军事行动费
+    defense_bonus: int = 0                # 军事奖励牌: 防御加成
+    colonize_bonus: int = 0               # 军事奖励牌: 殖民加成
+    tactics_units: dict[str, int] = field(default_factory=dict)
+    """阵型组成 {单位类别名: 数量}, 键为 CardCategory 名(如 {"INFANTRY": 2})."""
+    tactics_strength: int = 0             # 阵型军力
+    tactics_strength_outdated: int = 0    # 旧式阵型军力(数值表括号内数字)
+    territory_immediate: dict[str, int] = field(default_factory=dict)
+    """地区即时效果(如 {"science": 3} / {"military_card": 3} / {"population": 1})."""
+    territory_permanent: dict[str, int] = field(default_factory=dict)
+    """地区永久效果(如 {"yellow_token": 1, "blue_token": 1} / {"strength": 2})."""
 
 
 @dataclass(frozen=True)

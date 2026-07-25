@@ -21,14 +21,16 @@ def test_age_next() -> None:
     assert Age.III.next() is None
 
 
-def test_card_category_sixteen() -> None:
+def test_card_category_set() -> None:
+    """P1 内政 16 类 + P2 军事 7 类(事件/侵略/战争/条约/阵型/奖励/地区)."""
     expected = {
         "FARM", "MINE", "LAB", "TEMPLE", "LIBRARY", "THEATER", "ARENA",
         "INFANTRY", "CAVALRY", "ARTILLERY", "AIR",
         "GOVERNMENT", "LEADER", "WONDER", "ACTION", "SPECIAL",
+        "EVENT", "AGGRESSION", "WAR", "PACT", "TACTICS", "BONUS", "TERRITORY",
     }
     assert {c.name for c in CardCategory} == expected
-    assert len(CardCategory) == 16
+    assert len(CardCategory) == 23
 
 
 def test_category_sets() -> None:
