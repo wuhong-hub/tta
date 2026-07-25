@@ -1,4 +1,8 @@
-"""规则引擎公开接口(P1: tracks/enums/model/rng/state/actions/legal/apply/setup)."""
+"""规则引擎公开接口.
+
+P1: tracks/enums/model/rng/state/actions/legal/apply/setup
++ civ(文明数值)/effects(效果钩子)/economy(资源支付)/turn(回合机)。
+"""
 
 from tta.engine.actions import (
     Action,
@@ -9,6 +13,7 @@ from tta.engine.actions import (
     DevelopTech,
     Disband,
     IllegalActionError,
+    IncreasePopulation,
     PassTurn,
     PlayActionCard,
     PlayLeader,
@@ -18,6 +23,22 @@ from tta.engine.actions import (
     action_to_dict,
 )
 from tta.engine.apply import apply
+from tta.engine.civ import (
+    CivValues,
+    civ_values,
+    discontent,
+    hand_limit_civil,
+    is_uprising,
+)
+from tta.engine.economy import (
+    food_total,
+    gain_tokens,
+    pay,
+    produce,
+    resource_total,
+    settle_loss,
+)
+from tta.engine.effects import static_bonuses, turn_start_discounts
 from tta.engine.enums import (
     UNIT_CATEGORIES,
     URBAN_CATEGORIES,
@@ -48,17 +69,21 @@ from tta.engine.tracks import (
     happiness_required,
     population_cost,
 )
+from tta.engine.turn import advance
 
 __all__ = [
     "ROW_COSTS", "ROW_SLOTS", "UNIT_CATEGORIES", "URBAN_CATEGORIES",
     "WORKER_CATEGORIES", "Action", "Age", "Build", "BuildWonderStage",
-    "CardCategory", "CardDB", "CardDefinition", "DeckType", "Destroy",
-    "DevelopGovernment", "DevelopTech", "Disband", "GameState",
-    "GovernmentStats", "IllegalActionError", "PassTurn", "PendingEffect",
-    "PlayActionCard", "PlayLeader", "PlayerState", "SpecialType", "TakeCard",
-    "Upgrade", "action_from_dict", "action_to_dict", "apply",
-    "consumption_value", "corruption_value", "from_dict",
-    "happiness_required", "legal_actions", "new_game", "population_cost",
-    "replace_player", "rng_below", "rng_shuffle", "state_hash", "to_dict",
+    "CardCategory", "CardDB", "CardDefinition", "CivValues", "DeckType",
+    "Destroy", "DevelopGovernment", "DevelopTech", "Disband", "GameState",
+    "GovernmentStats", "IllegalActionError", "IncreasePopulation", "PassTurn",
+    "PendingEffect", "PlayActionCard", "PlayLeader", "PlayerState",
+    "SpecialType", "TakeCard", "Upgrade", "action_from_dict", "action_to_dict",
+    "advance", "apply", "civ_values", "consumption_value", "corruption_value",
+    "discontent", "food_total", "from_dict", "gain_tokens",
+    "hand_limit_civil", "happiness_required", "is_uprising", "legal_actions",
+    "new_game", "pay", "population_cost", "produce", "replace_player",
+    "resource_total", "rng_below", "rng_shuffle", "settle_loss",
+    "state_hash", "static_bonuses", "to_dict", "turn_start_discounts",
     "workers_total",
 ]
