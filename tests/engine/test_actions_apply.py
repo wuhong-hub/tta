@@ -274,7 +274,9 @@ def test_build_wonder_stage_completion() -> None:
 def test_play_action_card_framework(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _db()
 
-    def handler(state: GameState, player_index: int, db: CardDB) -> GameState:
+    def handler(
+        state: GameState, player_index: int, db: CardDB, option: str = "",
+    ) -> GameState:
         p = state.players[player_index]
         return replace_player(state, player_index,
                               copy.replace(p, culture=p.culture + 5))

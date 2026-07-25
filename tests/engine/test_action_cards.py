@@ -105,7 +105,9 @@ def _state(player: PlayerState, **overrides: object) -> GameState:
     return GameState(**base)
 
 
-def _stockpile_handler(state: GameState, player_index: int, db: CardDB) -> GameState:
+def _stockpile_handler(
+    state: GameState, player_index: int, db: CardDB, option: str = "",
+) -> GameState:
     """即时收益类桩: 食物与资源各 1 蓝点入最低级卡."""
     p = state.players[player_index]
     p = gain_tokens(db, p, "food", 1)
@@ -113,13 +115,17 @@ def _stockpile_handler(state: GameState, player_index: int, db: CardDB) -> GameS
     return replace_player(state, player_index, p)
 
 
-def _rich_land_handler(state: GameState, player_index: int, db: CardDB) -> GameState:
+def _rich_land_handler(
+    state: GameState, player_index: int, db: CardDB, option: str = "",
+) -> GameState:
     """折扣子行动类桩: 下一农场/矿场 Build/Upgrade 折扣 3 且 0 行动点."""
     return effects.push_pending(
         state, PendingEffect(effects.KIND_BUILD_FARM_MINE, 3))
 
 
-def _patriotism_handler(state: GameState, player_index: int, db: CardDB) -> GameState:
+def _patriotism_handler(
+    state: GameState, player_index: int, db: CardDB, option: str = "",
+) -> GameState:
     """回合修饰类桩: 红点 +1, 本回合兵种建造折扣 3."""
     p = state.players[player_index]
     discounts = dict(p.turn_discounts)
@@ -129,7 +135,9 @@ def _patriotism_handler(state: GameState, player_index: int, db: CardDB) -> Game
     return replace_player(state, player_index, p)
 
 
-def _genius_handler(state: GameState, player_index: int, db: CardDB) -> GameState:
+def _genius_handler(
+    state: GameState, player_index: int, db: CardDB, option: str = "",
+) -> GameState:
     """折扣子行动类桩(奇迹): 下一奇迹阶段折扣 2 且 0 行动点."""
     return effects.push_pending(
         state, PendingEffect(effects.KIND_WONDER_STAGE, 2))

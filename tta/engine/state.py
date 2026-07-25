@@ -16,10 +16,15 @@ ROW_SLOTS = 13
 
 @dataclass(frozen=True)
 class PendingEffect:
-    """行动卡等待结算的子行动."""
+    """行动卡等待结算的子行动.
 
-    kind: str        # "build_farm_mine" | "build_urban" | "wonder_stage"
+    kind "develop_tech"(breakthrough)时: discount 恒 0(全价研发),
+    science_gain 为研发完成后获得的科技点数。
+    """
+
+    kind: str        # "build_farm_mine" | "build_urban" | "wonder_stage" | "develop_tech"
     discount: int    # 资源费折扣
+    science_gain: int = 0  # develop_tech 子行动完成后的科技点收益
 
 
 @dataclass(frozen=True)
@@ -89,11 +94,17 @@ def replace_player(state: GameState, index: int, player: PlayerState) -> GameSta
 
 
 def _pending_to_dict(e: PendingEffect) -> dict:
-    return {"kind": e.kind, "discount": e.discount}
+    # science_gain 缺省 0 时不落盘, 保持旧格式逐字节兼容(棋谱哈希不变)
+    data = {"kind": e.kind, "discount": e.discount}
+    if e.science_gain:
+        data["science_gain"] = e.science_gain
+    return data
 
 
 def _pending_from_dict(d: dict) -> PendingEffect:
-    return PendingEffect(kind=d["kind"], discount=d["discount"])
+    return PendingEffect(
+        kind=d["kind"], discount=d["discount"],
+        science_gain=d.get("science_gain", 0))
 
 
 def _player_to_dict(p: PlayerState) -> dict:

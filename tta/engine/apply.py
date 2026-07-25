@@ -130,7 +130,8 @@ def _take_card(db: CardDB, state: GameState, action: TakeCard) -> GameState:
     card = db.get(card_id)
     cost = ROW_COSTS[action.row_index]
     if card.category is CardCategory.WONDER:
-        cost += len(p.wonders)
+        # 每已完成奇迹 +1 白点(michelangelo 免除, 与 legal 同口径)
+        cost += effects.wonder_take_surcharge(db, p)
     if card.category is CardCategory.LEADER:
         # hammurabi: 拿领袖牌 -1 白点(与 legal._take_card_legal 同口径)
         cost = max(0, cost - effects.leader_take_discount(db, p))
@@ -154,13 +155,21 @@ def _take_card(db: CardDB, state: GameState, action: TakeCard) -> GameState:
 def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameState:
     p = state.players[state.current_player]
     card = db.get(action.card_id)
+    free, science_gain = False, 0
+    if state.pending and state.pending[0].kind == effects.KIND_DEVELOP_TECH:
+        # breakthrough pending 子行动: 0 行动点, 全价研发后 +science_gain 科技
+        free, science_gain = True, state.pending[0].science_gain
+        state = replace(state, pending=state.pending[1:])
     p = _remove_from_hand(p, action.card_id)
-    if card.category in UNIT_CATEGORIES:
-        p = _spend_point(p, military=True)
-    else:
-        p = _spend_civil(db, p, 1)
-    p = replace(p, science=p.science - card.cost_science,
+    if not free:
+        if card.category in UNIT_CATEGORIES:
+            p = _spend_point(p, military=True)
+        else:
+            p = _spend_civil(db, p, 1)
+    p = replace(p, science=p.science - card.cost_science + science_gain,
                 developed=p.developed + (action.card_id,))
+    # leonardo 等领袖的研发即时收益(+1 资源)
+    p = effects.on_develop_tech_gains(db, p)
     return _update(state, p)
 
 
@@ -314,4 +323,4 @@ def _play_action_card(
     p = _spend_point(p, military=False)
     state = replace(state, discard=state.discard + (action.card_id,))
     state = _update(state, p)
-    return handler(state, state.current_player, db)
+    return handler(state, state.current_player, db, action.option)

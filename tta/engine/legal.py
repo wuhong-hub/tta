@@ -7,8 +7,11 @@ legal_actions(db, state) 枚举当前玩家的全部合法动作:
   Destroy / Disband / PlayLeader / BuildWonderStage / PlayActionCard /
   IncreasePopulation, PassTurn 恒在末尾。
 
-pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0)。
+pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0);
+breakthrough 的 develop_tech 子行动为 0 行动点全价研发手牌科技。
 回合修饰(turn_discounts): 目前仅兵种的 "unit_build" 建造折扣。
+选择类行动卡(如 reserves_i)按 effects.ACTION_OPTIONS 每个选项枚举一个
+PlayActionCard。
 
 领袖钩子(Task 9): hammurabi 拿领袖牌 -1 白点; hammurabi 红点垫付白点
 (SIMPLIFICATION, 仅 TakeCard/DevelopTech/Build/Upgrade 四处挂钩, 见
@@ -76,7 +79,8 @@ def _take_card_legal(
     card = db.get(card_id)
     cost = ROW_COSTS[row_index]
     if card.category is CardCategory.WONDER:
-        cost += len(p.wonders)
+        # 每已完成奇迹 +1 白点(michelangelo 免除, 见 effects)
+        cost += effects.wonder_take_surcharge(db, p)
     if card.category is CardCategory.LEADER:
         # hammurabi: 拿领袖牌 -1 白点
         cost = max(0, cost - effects.leader_take_discount(db, p))
@@ -263,6 +267,19 @@ def _wonder_actions(
     return [BuildWonderStage()]
 
 
+def _develop_tech_pending_actions(db: CardDB, p: PlayerState) -> list[Action]:
+    """breakthrough pending 子行动: 0 行动点全价研发手牌中一项科技."""
+    actions: list[Action] = []
+    for card_id in dict.fromkeys(p.hand_civil):
+        card = db.get(card_id)
+        if card.category not in _DEVELOP_CATEGORIES:
+            continue
+        if p.science < card.cost_science:
+            continue
+        actions.append(DevelopTech(card_id))
+    return actions
+
+
 def _pending_actions(
     db: CardDB, p: PlayerState, pending: PendingEffect,
 ) -> list[Action]:
@@ -278,6 +295,8 @@ def _pending_actions(
         return actions
     if pending.kind == effects.KIND_WONDER_STAGE:
         return _wonder_actions(db, p, point_cost=0, discount=pending.discount)
+    if pending.kind == effects.KIND_DEVELOP_TECH:
+        return _develop_tech_pending_actions(db, p)
     return []
 
 
@@ -309,7 +328,9 @@ def _action_card_actions(db: CardDB, p: PlayerState) -> list[Action]:
         condition = effects.PLAY_CONDITIONS.get(card.handler)
         if condition is not None and not condition(db, p):
             continue
-        actions.append(PlayActionCard(card_id))
+        # 选择类行动卡(如 reserves_i)每个合法 option 枚举一个动作
+        options = effects.ACTION_OPTIONS.get(card.handler, ("",))
+        actions.extend(PlayActionCard(card_id, option) for option in options)
     return actions
 
 
