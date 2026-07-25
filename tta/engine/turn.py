@@ -10,7 +10,8 @@ advance(state, db) 流程:
    食物消耗[每缺 1 -4 文化, 文化下限 0] -> 资源生产) -> 抓军事牌
    (min(剩余红点, 3) 张; 牌堆空则切洗军事弃牌堆重置牌堆, 弃牌堆也空则
    抓不到; 时代 IV 不抓) -> 恢复行动点(= civ 总值, 同时清零
-   tactics_this_turn) -> 重置 turn_discounts
+   tactics_this_turn; rebellion 事件的 civil_action_debt 于本次恢复时
+   生效并清零, 见 events) -> 重置 turn_discounts
    (注入领袖回合修饰, 如 homer 军事建造折扣, 见 effects.turn_start_discounts)。
    官方顺序: 回合结束阶段(含弃牌决策)全部完成后, 才轮到下一位的回合
    开始。压入 discard_military pending 时 advance 即停(phase 置
@@ -147,13 +148,15 @@ def end_of_turn(state: GameState, db: CardDB) -> GameState:
     # d. 抓军事牌: min(剩余红点, 3); 时代 IV 不抓
     state, p = _draw_military(state, p)
     # e. 恢复行动点 = civ 总值; 重置 turn_discounts(注入领袖回合修饰);
-    # 清零 tactics_this_turn(阵型打出/复制每回合限 1, 随行动点恢复重置)
+    # 清零 tactics_this_turn(阵型打出/复制每回合限 1, 随行动点恢复重置);
+    # civil_action_debt(rebellion 事件)于本次恢复时生效并清零(下回合 -2 白点)
     p = replace(
         p,
-        civil_actions=values.civil_actions,
+        civil_actions=max(0, values.civil_actions - p.civil_action_debt),
         military_actions=values.military_actions,
         turn_discounts=effects.turn_start_discounts(db, p),
         tactics_this_turn=False,
+        civil_action_debt=0,
     )
     return replace_player(state, idx, p)
 

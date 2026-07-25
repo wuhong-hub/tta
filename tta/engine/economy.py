@@ -17,6 +17,9 @@ gain_tokens 方向相反(供给区 -> 卡), 蓝点总量闭环守恒。
 
 生产(produce): 该类型每张有工人的卡各从供给区得 1 蓝点; 供给不足时高等级
 (token_value 降序, 并列 card_id 字典序升序)卡优先.
+
+按价值获得(gain_value): 向最低等级卡放蓝点直到累计价值达 amount; 单点
+价值超过剩余额时停止(找不齐的部分损失), 用于事件"生产 N 食物/资源"。
 """
 
 from dataclasses import replace
@@ -180,3 +183,27 @@ def produce(db: CardDB, p: PlayerState, kind: str) -> PlayerState:
         tokens[cid] = tokens.get(cid, 0) + 1
         blue_bank -= 1
     return replace(p, card_tokens=tokens, blue_bank=blue_bank)
+
+
+def gain_value(db: CardDB, p: PlayerState, kind: str, amount: int) -> PlayerState:
+    """按价值获得: 从供给区向该类型最低等级卡放蓝点, 累计价值恰好 amount.
+
+    单点价值超过剩余额时停止(找不齐的部分损失, 与 pay 找零同口径);
+    供给不足或场上无该类型卡时尽力而为。用于事件"生产/获得 N 食物或
+    资源"(如 border_conflict 产 3 资源、foray 产共 3 食物/资源)。
+    """
+    category = _category(kind)
+    if amount < 0:
+        msg = f"amount 须非负, 收到 {amount}"
+        raise ValueError(msg)
+    ids = _kind_card_ids(db, p, category)
+    if not ids or amount == 0 or p.blue_bank == 0:
+        return p
+    target = min(ids, key=lambda cid: _lowest_key(db, cid))
+    value = db.get(target).token_value
+    n = min(amount // value, p.blue_bank)
+    if n <= 0:
+        return p
+    tokens = dict(p.card_tokens)
+    tokens[target] = tokens.get(target, 0) + n
+    return replace(p, card_tokens=tokens, blue_bank=p.blue_bank - n)

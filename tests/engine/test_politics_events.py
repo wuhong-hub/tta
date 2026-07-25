@@ -259,16 +259,16 @@ def test_seed_event_unregistered_age_a_event_fails_loud() -> None:
 
 
 def test_seed_event_unregistered_later_age_passes_through() -> None:
-    # TODO(T6/T11/T12): 时代 I/II/III 事件 handler 未注册前, 揭示为无效果
+    # TODO(T11/T12): 时代 II/III 事件 handler 未注册前, 揭示为无效果
     # 过场(不阻塞对局), 直接入 past_events; 注册后该兜底移除
     db = build_card_db()
     p0 = _player("P0", hand_military=("development_of_crafts",))
     state = _state(
         players=(p0, _player("P1")),
-        current_events=("barbarians", "development_of_science"),
+        current_events=("cold_war", "development_of_science"),
     )
     new = apply(state, SeedEvent("development_of_crafts"), db)
-    assert new.past_events == ("barbarians",)
+    assert new.past_events == ("cold_war",)
 
 
 def test_event_handlers_registry_stub() -> None:

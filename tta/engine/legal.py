@@ -5,9 +5,9 @@ legal_actions(db, state) 枚举行动者的全部合法动作:
 - pending 非空 -> 仅可结算首个 pending 的动作; 行动者为 pending[0].responder
   (None 时为 current_player)。DeclineResponse 兜底仅当 pending[0].kind 在
   可放弃白名单(events.DECLINABLE_PENDING_KINDS; 强制类如 discard_military
-  不可放弃); PassTurn 兜底仅当行动者即 current_player、处于 ACTION 相位
-  且 pending 栈中无他玩家 responder(防止一次 PassTurn 丢弃他玩家的事件
-  选择 pending);
+  与强制失去类事件 pending 不可放弃); PassTurn 兜底仅当 pending[0].kind
+  可放弃、行动者即 current_player、处于 ACTION 相位且 pending 栈中无他玩家
+  responder(防止一次 PassTurn 丢弃他玩家的事件选择 pending 或逃避强制失去);
 - phase == POLITICS -> 政治动作(politics.politics_actions, 每回合限 1)
   + SkipPolitics;
 - phase == TURN_START -> [](引擎自动相位, 玩家不可行动);
@@ -347,6 +347,19 @@ def _pending_actions(
     if pending.kind == events.KIND_EVENT_MARKETS:
         # development_of_markets: +2 食物或 +2 资源二选一
         return [ChooseEventOption("food"), ChooseEventOption("resource")]
+    if pending.kind == events.KIND_EVENT_DESTROY_BUILDING:
+        # border_conflict: 选 1 张有工人的城市建筑/农场/矿场卡失去(强制;
+        # 压入前已保证非空, 见 events._border_conflict)
+        return [
+            ChooseEventOption(card_id)
+            for card_id in events.destroyable_building_ids(p)
+        ]
+    if pending.kind == events.KIND_EVENT_FORAY:
+        # foray: 食物/资源组合(按价值共 3), 恒可执行(供给不足尽力而为)
+        return [ChooseEventOption(option) for option in events.FORAY_OPTIONS]
+    if pending.kind == events.KIND_EVENT_RAIDERS:
+        # raiders: 食物/资源组合(按价值共 2), 恒可执行(不足损失到此为止)
+        return [ChooseEventOption(option) for option in events.RAIDERS_OPTIONS]
     if pending.kind in events.EVENT_FREE_BUILD:
         # development_of_religion/warfare: 免费建 1 宗教/战士
         return _free_build_actions(p, events.EVENT_FREE_BUILD[pending.kind])
@@ -464,10 +477,15 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
         actions = _pending_actions(db, state.players[actor], state.pending[0])
         if state.pending[0].kind in events.DECLINABLE_PENDING_KINDS:
             actions.append(DeclineResponse())
-        if (actor == state.current_player
+        if (state.pending[0].kind in events.DECLINABLE_PENDING_KINDS
+                and actor == state.current_player
                 and state.phase is Phase.ACTION
                 and all(e.responder in (None, state.current_player)
                         for e in state.pending)):
+            # PassTurn 兜底(丢弃全部 pending 并推进回合): 仅可放弃类 kind
+            # (强制失去类事件 pending 如 raiders/border_conflict 不允许借此
+            # 逃避); 且行动者即 current_player、ACTION 相位、栈中无他玩家
+            # responder(防止一次 PassTurn 丢弃他玩家的事件选择 pending)
             actions.append(PassTurn())
         return actions
     if state.phase is Phase.POLITICS:

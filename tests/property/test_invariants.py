@@ -3,13 +3,15 @@
 用 stdlib random 驱动随机合法动作, 跑 10 个种子的 2 人整局, 每步断言:
 
 1. 黄点守恒(每人): yellow_bank + worker_pool + 建筑工人数
-   = 25 − 2 × (已结束的时代 I/II/III 数)。
+   = 25 − 2 × (已结束的时代 I/II/III 数) + uncertain_borders 净转入。
    口径说明: 时代 A 结束官方规则 "nothing else happens"(无 −2),
    时代 I/II/III 结束各 −2(turn.py AGE_END_YELLOW_LOSS; III 结束进入
    时代 IV 前在 _enter_age_four 执行同一序列)。由 state.age 推断已结束的
    时代 I/II/III 数: A/I -> 0, II -> 1, III -> 2, IV -> 3。引擎对 −2 做
    下限 0 截断(max(0, bank − 2)), 时代结束时 yellow_bank 实际恒 ≥ 2,
-   等号成立。
+   等号成立。uncertain_borders 事件(时代 I)将 1 黄点从最弱银行转入最强
+   银行, 是全引擎唯一改变每人黄点总量的效果; 驱动循环在筹划揭示该事件时
+   按结算前后差值累计净转入(yellow_adj), 其余步骤严格等号。
 2. 蓝点守恒(每人, 精确等号): blue_bank + Σ card_tokens + 进行中奇迹
    已付阶段数 == 16 + 3 × (本局已成功研发 justice_system +
    civil_service 的次数, 由驱动循环按 DevelopTech 动作追踪)。
@@ -39,7 +41,7 @@ from collections import Counter
 import pytest
 
 from tta.cards import build_card_db
-from tta.engine.actions import DevelopTech
+from tta.engine.actions import DevelopTech, SeedEvent
 from tta.engine.apply import apply
 from tta.engine.enums import Age, DeckType
 from tta.engine.legal import legal_actions
@@ -151,12 +153,13 @@ def _blue_ceiling(blue_gains: int) -> int:
 
 
 def _assert_player_invariants(
-    db, state: GameState, p: PlayerState, blue_gains: int,
+    db, state: GameState, p: PlayerState, blue_gains: int, yellow_adj: int = 0,
 ) -> None:
-    # 黄点守恒(精确等号, 口径见模块 docstring)
-    assert _yellow_total(p) == _yellow_expected(state.age), (
+    # 黄点守恒(精确等号, 口径见模块 docstring; yellow_adj = uncertain_borders
+    # 净转入, 由驱动循环累计)
+    assert _yellow_total(p) == _yellow_expected(state.age) + yellow_adj, (
         f"{p.name} 黄点不守恒: {_yellow_total(p)} != "
-        f"{_yellow_expected(state.age)} (age={state.age})"
+        f"{_yellow_expected(state.age)} + {yellow_adj} (age={state.age})"
     )
     # 蓝点精确守恒(支付/消耗/腐败/奇迹完成均放回供给区, 见模块 docstring)
     assert _blue_total(p) == _blue_ceiling(blue_gains), (
@@ -178,6 +181,7 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
     rng = random.Random(seed)
     universe = _universe(db, 2)
     blue_gains = [0, 0]
+    yellow_adj = [0, 0]
     steps = 0
     while not state.terminal:
         legal = legal_actions(db, state)
@@ -186,10 +190,21 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
             # 研发 justice_system/civil_service 各从盒中 +3 蓝点(含
             # breakthrough pending 子行动; 替换移除不影响已得蓝点)
             blue_gains[state.current_player] += 1
+        # uncertain_borders: 最弱银行转 1 黄点给最强银行(唯一改变每人黄点
+        # 总量的效果), 按结算前后差值累计净转入
+        uncertain = (
+            isinstance(action, SeedEvent)
+            and state.current_events[:1] == ("uncertain_borders",)
+        )
+        before = [_yellow_total(p) for p in state.players] if uncertain else []
         state = apply(state, action, db)
+        if uncertain:
+            for i, p in enumerate(state.players):
+                yellow_adj[i] += _yellow_total(p) - before[i]
         steps += 1
         for i, p in enumerate(state.players):
-            _assert_player_invariants(db, state, p, blue_gains[i])
+            _assert_player_invariants(
+                db, state, p, blue_gains[i], yellow_adj[i])
         assert _accounted(state) == universe, (
             f"seed {seed} step {steps} 卡牌守恒破坏: "
             f"{_accounted(state) - universe} / {universe - _accounted(state)}"

@@ -69,6 +69,8 @@ class PlayerState:
     declared_wars: tuple[str, ...] = ()      # 已宣告待结算的战争牌
     pacts: tuple[str, ...] = ()              # 生效中的条约(卡 id, 3-4 人)
     caesar_used: bool = False                # Julius Caesar 双政治一次性
+    civil_action_debt: int = 0               # 下回合白点扣减(rebellion 事件;
+                                             # 回合末行动点恢复时生效并清零)
 
 
 @dataclass(frozen=True)
@@ -146,7 +148,7 @@ def _pending_from_dict(d: dict) -> PendingEffect:
 
 
 def _player_to_dict(p: PlayerState) -> dict:
-    return {
+    data = {
         "name": p.name,
         "culture": p.culture,
         "science": p.science,
@@ -175,6 +177,11 @@ def _player_to_dict(p: PlayerState) -> dict:
         "pacts": list(p.pacts),
         "caesar_used": p.caesar_used,
     }
+    if p.civil_action_debt:
+        # rebellion 下回合白点扣减; 非 0 才落盘(旧格式逐字节兼容)
+        data["civil_action_debt"] = p.civil_action_debt
+    return data
+    return data
 
 
 def _player_from_dict(d: dict) -> PlayerState:
@@ -208,6 +215,7 @@ def _player_from_dict(d: dict) -> PlayerState:
         declared_wars=tuple(d.get("declared_wars", ())),
         pacts=tuple(d.get("pacts", ())),
         caesar_used=d.get("caesar_used", False),
+        civil_action_debt=d.get("civil_action_debt", 0),
     )
 
 

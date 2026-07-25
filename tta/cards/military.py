@@ -361,7 +361,7 @@ DEVELOPMENT_OF_WARFARE = _event(
 # 时代 I(15 张)
 BARBARIANS = _event(
     "barbarians", "蛮族", "Barbarians", Age.I,
-    "若军力领先者是两个最弱文明之一,其失去 1 人口。",
+    "若文化领先者是两个最弱文明之一,其失去 1 人口。",
 )
 BORDER_CONFLICT = _event(
     "border_conflict", "边境冲突", "Border Conflict", Age.I,
