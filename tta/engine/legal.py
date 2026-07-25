@@ -123,11 +123,15 @@ def _government_actions(db: CardDB, p: PlayerState) -> list[Action]:
         card = db.get(card_id)
         if card.category is not CardCategory.GOVERNMENT:
             continue
-        if p.civil_actions < 1:
-            continue
-        if p.science >= card.cost_science:
+        if p.civil_actions >= 1 and p.science >= card.cost_science:
             actions.append(DevelopGovernment(card_id, False))
-        if p.science >= card.cost_science_revolution:
+        # robespierre: 革命花全部红点(而非全部白点), 合法性按红点判定
+        revolution_ok = (
+            p.military_actions >= 1
+            if effects.revolution_uses_military(db, p)
+            else p.civil_actions >= 1
+        )
+        if revolution_ok and p.science >= card.cost_science_revolution:
             actions.append(DevelopGovernment(card_id, True))
     return actions
 
@@ -293,6 +297,12 @@ def _pending_actions(
             db, p, categories=categories, point_cost=0,
             discount=pending.discount)
         return actions
+    # 仅升级类 pending(efficient_upgrade): 只生成 Upgrade
+    upgrade_categories = effects.PENDING_UPGRADE_CATEGORIES.get(pending.kind)
+    if upgrade_categories is not None:
+        return _upgrade_actions(
+            db, p, categories=upgrade_categories, point_cost=0,
+            discount=pending.discount)
     if pending.kind == effects.KIND_WONDER_STAGE:
         return _wonder_actions(db, p, point_cost=0, discount=pending.discount)
     if pending.kind == effects.KIND_DEVELOP_TECH:

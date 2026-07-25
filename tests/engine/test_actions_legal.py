@@ -462,7 +462,7 @@ def test_play_action_card_requires_registered_handler(
                 if isinstance(a, PlayActionCard)]
     # 注册后: 仅已注册者可打出
     monkeypatch.setitem(effects.ACTION_HANDLERS, "test_action",
-                        lambda db, state: state)
+                        lambda state, idx, db, option: state)
     p = _player(civil_actions=1, hand_civil=hand)
     actions = [a for a in legal_actions(db, _state(p))
                if isinstance(a, PlayActionCard)]

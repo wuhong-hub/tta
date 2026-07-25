@@ -44,6 +44,24 @@ Age A 领袖钩子(Task 9):
   每步兵/炮兵 +1 军力; st_peters_basilica 他文明笑脸与 taj_mahal
   蓝点/换领袖折扣 P2-DEFERRED。
 
+时代 II 钩子(Task 11):
+- napoleon_bonaparte: STATIC_BONUS(+2 军事行动; 每种军事单位类型
+  +2 军力, 同种多工人只计 1 种);
+- maximilien_robespierre: STATIC_BONUS(+1 军事行动);
+  revolution_uses_military 使革命花全部红点而非全部白点(挂钩于
+  legal/apply 的 DevelopGovernment); 革命时 +3 笑脸(一次性)
+  P2-DEFERRED;
+- isaac_newton: STATIC_BONUS(最佳实验室/图书馆每级 +1 科技, 同
+  leonardo 口径); on_develop_tech_gains 在 apply DevelopTech 结算时
+  拿回 1 白点;
+- william_shakespeare / james_cook / j_s_bach: 互动能力(图书馆剧院
+  配对与折扣/殖民与弃军事牌/剧院折扣与升级)P2-DEFERRED, 仅卡文本;
+- 特殊科技: strategy / justice_system / navigation 静态加成;
+  justice_system 研发时 +3 蓝点(on_develop_tech_gains 按卡 id);
+  architecture 建造折扣与三阶段 P2-DEFERRED;
+- 奇迹: transcontinental_railroad 最佳矿场翻倍与 ocean_liner_service
+  免费增人口 P2-DEFERRED; kremlin 的 -1 笑脸经 wonder_bonus 静态生效。
+
 engine 包不得 import tta.cards, 故领袖卡 id 以字符串常量定义于此。
 """
 
@@ -118,16 +136,35 @@ LEADER_GENGHIS_KHAN = "genghis_khan"           # P2-DEFERRED, 无钩子
 LEADER_COLUMBUS = "christopher_columbus"       # P2-DEFERRED, 无钩子
 LEADER_BARBAROSSA = "frederick_barbarossa"     # P2-DEFERRED, 无钩子
 
+# 时代 II 领袖卡 id
+LEADER_SHAKESPEARE = "william_shakespeare"         # P2-DEFERRED, 无钩子
+LEADER_COOK = "james_cook"                         # P2-DEFERRED, 无钩子
+LEADER_NAPOLEON = "napoleon_bonaparte"
+LEADER_ROBESPIERRE = "maximilien_robespierre"
+LEADER_BACH = "j_s_bach"                           # P2-DEFERRED, 无钩子
+LEADER_NEWTON = "isaac_newton"
+
+# 时代 II 特殊科技卡 id(justice_system 研发时 +3 蓝点, 按卡 id 挂钩)
+SPECIAL_JUSTICE_SYSTEM = "justice_system"
+
 KIND_BUILD_FARM_MINE = "build_farm_mine"
 KIND_BUILD_URBAN = "build_urban"
 KIND_WONDER_STAGE = "wonder_stage"
 KIND_DEVELOP_TECH = "develop_tech"
+KIND_UPGRADE_FARM_MINE_URBAN = "upgrade_farm_mine_urban"
 
 PENDING_BUILD_CATEGORIES: dict[str, frozenset[CardCategory]] = {
     KIND_BUILD_FARM_MINE: frozenset({CardCategory.FARM, CardCategory.MINE}),
     KIND_BUILD_URBAN: URBAN_CATEGORIES,
 }
 """建造类 pending kind -> 允许的卡牌类别(Build/Upgrade 目标须在其中)."""
+
+PENDING_UPGRADE_CATEGORIES: dict[str, frozenset[CardCategory]] = {
+    KIND_UPGRADE_FARM_MINE_URBAN: (
+        frozenset({CardCategory.FARM, CardCategory.MINE}) | URBAN_CATEGORIES
+    ),
+}
+"""仅升级类 pending kind -> 允许的卡牌类别(efficient_upgrade, 不含兵种)."""
 
 
 def push_pending(state: GameState, pending: PendingEffect) -> GameState:
@@ -363,15 +400,92 @@ def wonder_take_surcharge(db: CardDB, p: PlayerState) -> int:
     return len(p.wonders)
 
 
-def on_develop_tech_gains(db: CardDB, p: PlayerState) -> PlayerState:
-    """DevelopTech 结算后的领袖即时收益(leonardo: +1 资源, 蓝点入最低级矿场).
+def on_develop_tech_gains(
+    db: CardDB, p: PlayerState, card_id: str = "",
+) -> PlayerState:
+    """DevelopTech 结算后的即时收益(领袖钩子 + 特殊科技自身效果).
+
+    - leonardo: +1 资源(蓝点入最低级矿场);
+    - isaac_newton: 拿回 1 白点(SIMPLIFICATION: 研发兵种科技所花红点
+      也以白点形式拿回; breakthrough pending 0 行动点研发同样触发);
+    - justice_system(特殊科技自身): 研发时立即 +3 蓝点。
 
     调用点为 apply 的 DevelopTech(含 breakthrough pending 子行动);
     变更政体(DevelopGovernment)不触发。
     """
     if p.leader == LEADER_LEONARDO:
-        return economy.gain_tokens(db, p, "resource", 1)
+        p = economy.gain_tokens(db, p, "resource", 1)
+    elif p.leader == LEADER_NEWTON:
+        p = replace(p, civil_actions=p.civil_actions + 1)
+    if card_id == SPECIAL_JUSTICE_SYSTEM:
+        p = replace(p, blue_bank=p.blue_bank + 3)
     return p
+
+
+# --- 时代 II 领袖/特殊科技钩子(Task 11) ---------------------------------------
+
+
+def _napoleon_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
+    """napoleon: +2 军事行动; 每种军事单位类型(有工人的兵种卡)+2 军力."""
+    unit_types = sum(
+        1
+        for category in UNIT_CATEGORIES
+        for workers in p.buildings.get(category.value, {}).values()
+        if workers > 0
+    )
+    return {"military_actions": 2, "strength": 2 * unit_types}
+
+
+def _robespierre_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
+    """robespierre: +1 军事行动(革命红点费见 revolution_uses_military)."""
+    return {"military_actions": 1}
+
+
+def revolution_uses_military(db: CardDB, p: PlayerState) -> bool:
+    """革命是否花全部红点而非全部白点(robespierre).
+
+    挂钩于 legal 的 DevelopGovernment 合法性与 apply 的革命扣点;
+    革命时 +3 笑脸(一次性)P2-DEFERRED。
+    """
+    return p.leader == LEADER_ROBESPIERRE
+
+
+def _newton_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
+    """isaac_newton: 最佳实验室/图书馆每级 +1 科技(同 leonardo 口径).
+
+    SIMPLIFICATION: 按已研发卡计(不要求卡上有工人)。
+    """
+    best = 0
+    for card_id in p.developed:
+        card = db.get(card_id)
+        if card.category in (CardCategory.LAB, CardCategory.LIBRARY):
+            best = max(best, _TECH_LEVEL[card.age])
+    return {"science": best} if best else {}
+
+
+def _strategy_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
+    """strategy(特殊科技): +3 军力 +2 军事行动."""
+    return {"strength": 3, "military_actions": 2}
+
+
+def _justice_system_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
+    """justice_system(特殊科技): +1 内政行动(研发 +3 蓝点见 on_develop)."""
+    return {"civil_actions": 1}
+
+
+def _navigation_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
+    """navigation(特殊科技): +2 殖民修正(殖民 P2-DEFERRED)+3 军力."""
+    return {"colonization": 2, "strength": 3}
+
+
+STATIC_BONUS_HANDLERS.update({
+    LEADER_NAPOLEON: _napoleon_bonus,
+    LEADER_ROBESPIERRE: _robespierre_bonus,
+    LEADER_NEWTON: _newton_bonus,
+    "strategy": _strategy_bonus,
+    "justice_system": _justice_system_bonus,
+    "navigation": _navigation_bonus,
+})
 
 
 # --- 行动卡 handler 工厂 ---------------------------------------------------------
@@ -501,6 +615,69 @@ def _make_reserves_handler(
     return handler
 
 
+def _make_revolutionary_idea_handler(
+    science: int,
+) -> Callable[[GameState, int, CardDB, str], GameState]:
+    """revolutionary_idea: +science 科技(时代 II 新增即时收益类)."""
+
+    def handler(
+        state: GameState, player_index: int, db: CardDB, option: str = "",
+    ) -> GameState:
+        p = state.players[player_index]
+        p = replace(p, science=p.science + science)
+        return replace_player(state, player_index, p)
+
+    return handler
+
+
+def _make_upgrade_subaction_handler(
+    discount: int,
+) -> Callable[[GameState, int, CardDB, str], GameState]:
+    """efficient_upgrade: 下一农场/矿场/城市建筑 Upgrade 0 行动点且折扣.
+
+    与 rich_land/urban_growth 的差别: 仅 Upgrade(不可 Build),
+    兵种升级不在其列(kind 查 PENDING_UPGRADE_CATEGORIES)。
+    """
+
+    def handler(
+        state: GameState, player_index: int, db: CardDB, option: str = "",
+    ) -> GameState:
+        return push_pending(
+            state, PendingEffect(KIND_UPGRADE_FARM_MINE_URBAN, discount))
+
+    return handler
+
+
+_WAVE_DISCOUNT_BY_PLAYERS = {2: 6, 3: 3, 4: 2}
+"""wave_of_nationalism 每个更强文明提供的兵种建造折扣(按玩家人数)."""
+
+
+def _wave_of_nationalism_ii_handler(
+    state: GameState, player_index: int, db: CardDB, option: str = "",
+) -> GameState:
+    """wave_of_nationalism_ii: 每个军力更高的文明 +6/3/2 本回合兵种建造折扣.
+
+    强度比较需全玩家信息, 故为 handler 内即时计算(行动卡 handler 拿到
+    完整 state); civ 依赖 effects, 此处延迟导入避免循环。
+    """
+    from tta.engine.civ import civ_values
+    p = state.players[player_index]
+    mine = civ_values(db, p).strength
+    stronger = sum(
+        1
+        for i, other in enumerate(state.players)
+        if i != player_index and civ_values(db, other).strength > mine
+    )
+    if not stronger:
+        return state
+    per = _WAVE_DISCOUNT_BY_PLAYERS[len(state.players)]
+    discounts = dict(p.turn_discounts)
+    key = UNIT_BUILD_DISCOUNT_KEY
+    discounts[key] = discounts.get(key, 0) + stronger * per
+    p = replace(p, turn_discounts=discounts)
+    return replace_player(state, player_index, p)
+
+
 # Age A 实例(X 取 PDF Bonus 列 Age A 值)
 ACTION_HANDLERS.update({
     "stockpile": _stockpile_handler,
@@ -524,8 +701,24 @@ ACTION_HANDLERS.update({
     "urban_growth_i": _make_build_subaction_handler(KIND_BUILD_URBAN, 2),
 })
 
+# 时代 II 实例(X 取 PDF Bonus 列 Age II 值; engineering_genius X=4,
+# revolutionary_idea X=4; 时代 II 无 cultural_heritage / stockpile)
+ACTION_HANDLERS.update({
+    "breakthrough_ii": _make_breakthrough_handler(3),
+    "efficient_upgrade_ii": _make_upgrade_subaction_handler(3),
+    "engineering_genius_ii": _make_engineering_genius_handler(4),
+    "frugality_ii": _make_frugality_handler(3),
+    "patriotism_ii": _make_patriotism_handler(3),
+    "reserves_ii": _make_reserves_handler(3),
+    "revolutionary_idea_ii": _make_revolutionary_idea_handler(4),
+    "rich_land_ii": _make_build_subaction_handler(KIND_BUILD_FARM_MINE, 3),
+    "urban_growth_ii": _make_build_subaction_handler(KIND_BUILD_URBAN, 3),
+    "wave_of_nationalism_ii": _wave_of_nationalism_ii_handler,
+})
+
 ACTION_OPTIONS.update({
     "reserves_i": ("resource", "food"),
+    "reserves_ii": ("resource", "food"),
 })
 
 # 折扣/子行动类与 handler 成对注册(legal 打出预判用)
@@ -537,9 +730,15 @@ PENDING_SPECS.update({
     "engineering_genius_i": PendingEffect(KIND_WONDER_STAGE, 3),
     "rich_land_i": PendingEffect(KIND_BUILD_FARM_MINE, 2),
     "urban_growth_i": PendingEffect(KIND_BUILD_URBAN, 2),
+    "breakthrough_ii": PendingEffect(KIND_DEVELOP_TECH, 0, science_gain=3),
+    "efficient_upgrade_ii": PendingEffect(KIND_UPGRADE_FARM_MINE_URBAN, 3),
+    "engineering_genius_ii": PendingEffect(KIND_WONDER_STAGE, 4),
+    "rich_land_ii": PendingEffect(KIND_BUILD_FARM_MINE, 3),
+    "urban_growth_ii": PendingEffect(KIND_BUILD_URBAN, 3),
 })
 
 PLAY_CONDITIONS.update({
     "frugality": can_increase_population,
     "frugality_i": can_increase_population,
+    "frugality_ii": can_increase_population,
 })

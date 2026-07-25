@@ -168,8 +168,8 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
             p = _spend_civil(db, p, 1)
     p = replace(p, science=p.science - card.cost_science + science_gain,
                 developed=p.developed + (action.card_id,))
-    # leonardo 等领袖的研发即时收益(+1 资源)
-    p = effects.on_develop_tech_gains(db, p)
+    # 研发即时收益(leonardo +1 资源 / newton 拿回白点 / justice_system +3 蓝点)
+    p = effects.on_develop_tech_gains(db, p, action.card_id)
     return _update(state, p)
 
 
@@ -180,9 +180,12 @@ def _develop_government(
     card = db.get(action.card_id)
     p = _remove_from_hand(p, action.card_id)
     if action.revolution:
-        # 革命: 低费 + 全部剩余白点
+        # 革命: 低费 + 全部剩余白点(robespierre: 全部剩余红点)
         fee = card.cost_science_revolution
-        p = replace(p, civil_actions=0)
+        if effects.revolution_uses_military(db, p):
+            p = replace(p, military_actions=0)
+        else:
+            p = replace(p, civil_actions=0)
     else:
         fee = card.cost_science
         p = _spend_point(p, military=False)
@@ -213,7 +216,8 @@ def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
     p = state.players[state.current_player]
     from_card = db.get(action.from_card_id)
     to_card = db.get(action.to_card_id)
-    free, discount, state = _match_build_pending(state, from_card.category)
+    free, discount, state = _match_build_pending(
+        state, from_card.category, upgrade=True)
     if not free:
         if from_card.category in UNIT_CATEGORIES:
             p = _spend_point(p, military=True)
@@ -229,10 +233,12 @@ def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
 
 
 def _match_build_pending(
-    state: GameState, category: CardCategory,
+    state: GameState, category: CardCategory, *, upgrade: bool = False,
 ) -> tuple[bool, int, GameState]:
     """Build/Upgrade 与首个 pending 匹配时: pop pending, 返回 (0 行动点, 折扣).
 
+    upgrade=True 时额外匹配仅升级类 pending(efficient_upgrade, 见
+    effects.PENDING_UPGRADE_CATEGORIES); Build 不匹配该类。
     不匹配(或无 pending)时返回 (False, 0, 原 state), 走正常扣点全费流程。
     合法性由 legal 保证: pending 非空时只会生成匹配的动作。
     """
@@ -240,6 +246,8 @@ def _match_build_pending(
         return False, 0, state
     pending = state.pending[0]
     categories = effects.PENDING_BUILD_CATEGORIES.get(pending.kind)
+    if categories is None and upgrade:
+        categories = effects.PENDING_UPGRADE_CATEGORIES.get(pending.kind)
     if categories is None or category not in categories:
         return False, 0, state
     return True, pending.discount, replace(state, pending=state.pending[1:])
