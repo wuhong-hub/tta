@@ -1,8 +1,9 @@
-"""政治阶段动作与 SeedEvent 结算(P2-T5) + 殖民竞拍与地区牌(P2-T7).
+"""政治阶段动作与 SeedEvent 结算(P2-T5) + 殖民竞拍与地区牌(P2-T7)
++ 侵略与防御响应(P2-T8).
 
 每回合限 1 政治行动: POLITICS 相位 legal = 政治动作 + SkipPolitics(见
 legal.py), 任一政治动作结算后置 phase=ACTION(Julius Caesar 一次性双政治
-T10)。侵略/战争/条约/退出动作类型已建(actions.py), 结算见 T8/T9/T10。
+T10)。战争/条约/退出动作类型已建(actions.py), 结算见 T9/T10。
 
 SeedEvent 结算(规则书 p4/p7):
 1. 军事手牌中的 EVENT 卡面朝下压入 future_events 顶;
@@ -12,6 +13,27 @@ SeedEvent 结算(规则书 p4/p7):
      past_events;
 3. 若揭示的是 current_events 最后一张: 重洗 future_events(按时代分组,
    早时代在上, 组内 rng_shuffle)成为新 current_events。
+
+侵略与防御响应(规则书 p4 发动侵略, P2-T8):
+- PlayAggression 合法性(legal 枚举): 手牌中的 AGGRESSION 卡(handler 已
+  注册)、目标非己、目标军力 < 攻击方军力("不能攻击军力等级大于或等于你
+  的玩家")、无停战类条约(双方 pacts 同录 ATTACK_BLOCKING_PACTS)、军事
+  行动费足够(目标领袖为甘地时费用 ×2; 攻击方领袖为甘地时不可打出侵略牌
+  ——甘地卡文本"你不能打出侵略或战争牌")。
+- 结算: 付军事行动费, 侵略卡从手牌揭示, 压 aggression_defense pending
+  (responder=目标, context={card, attacker, attack_strength(快照),
+  defense_bonus, defense_cards})。
+- 防御方动作: PlayDefenseBonus(军事奖励牌防御数值)/ DiscardForStrength
+  (弃 1 军事牌 +1 军力), 均可多张, 但打出+弃置总数 <= 防御方总军事行动
+  点数(规则书 p4 限制); PassResponse 结束响应并判定。
+- 判定: 防御方军力(civ 军力 + defense_bonus) >= attack_strength -> 侵略
+  失败, 侵略牌入军事弃牌堆, 无效果; 否则侵略成功, 侵略牌入军事弃牌堆并
+  结算 AGGRESSION_HANDLERS[card.handler]。结算后 phase -> ACTION(控制权
+  经响应机制自然回到攻击方, current_player 全程不变)。
+- 受害者的"选择"(plunder 食物/资源组合、raid 建筑、annex 殖民地、
+  infiltrate 领袖/未完成奇迹)压 pending(responder=受害者), 由
+  ChooseEventOption 结算(强制失去, 不可 DeclineResponse; raid 无合格
+  建筑时 PassResponse 跳过该次摧毁)。
 
 殖民竞拍(规则书 p7 殖民节):
 - 揭示 TERRITORY -> pending kind="colonize_bid", responder 从揭示者起
@@ -39,20 +61,31 @@ SeedEvent 结算(规则书 p4/p7):
   永久效果(除黄/蓝标记)接入 civ.py 合成。
 """
 
+from collections.abc import Callable
 from dataclasses import replace
 
-from tta.engine import economy, events, military
+from tta.engine import economy, effects, events, military
 from tta.engine.actions import (
+    Action,
     ColonizeBid,
     ColonizePass,
     ColonizePlayBonus,
     ColonizeSacrifice,
+    DiscardForStrength,
     IllegalActionError,
+    PlayAggression,
+    PlayDefenseBonus,
     SeedEvent,
 )
 from tta.engine.civ import civ_values
-from tta.engine.enums import UNIT_CATEGORIES, Age, CardCategory, Phase
-from tta.engine.model import CardDB
+from tta.engine.enums import (
+    UNIT_CATEGORIES,
+    URBAN_CATEGORIES,
+    Age,
+    CardCategory,
+    Phase,
+)
+from tta.engine.model import CardDB, CardDefinition
 from tta.engine.rng import rng_shuffle
 from tta.engine.state import (
     GameState,
@@ -76,19 +109,53 @@ _COLONY_TOKEN_KEYS = ("yellow_token", "blue_token")
 """殖民地永久效果中的一次性银行标记键(获得时调整, 不入 civ 合成)."""
 
 
-def politics_actions(db: CardDB, state: GameState) -> list[SeedEvent]:
+def politics_actions(db: CardDB, state: GameState) -> list[Action]:
     """POLITICS 相位可用政治动作(不含 SkipPolitics, 由 legal 追加).
 
-    当前仅 SeedEvent(军事手牌中的 EVENT 卡); 侵略/战争/条约动作 T8/T9/T10
-    加入。RULES-CHECK(规则书 p4 未禁止): 时代 IV 无军事牌可抽, 但手牌中
-    已有的事件牌仍可筹划。
+    当前为 SeedEvent(军事手牌中的 EVENT 卡) + PlayAggression(军事手牌中
+    的 AGGRESSION 卡 × 合法目标); 战争/条约动作 T9/T10 加入。
+    RULES-CHECK(规则书 p4 未禁止): 时代 IV 无军事牌可抽, 但手牌中已有的
+    事件牌仍可筹划、侵略牌仍可打出。
     """
-    p = state.players[state.current_player]
-    return [
+    idx = state.current_player
+    p = state.players[idx]
+    actions: list[Action] = [
         SeedEvent(card_id)
         for card_id in dict.fromkeys(p.hand_military)
         if db.get(card_id).category is CardCategory.EVENT
     ]
+    actions.extend(_aggression_actions(db, state, idx, p))
+    return actions
+
+
+def _aggression_actions(
+    db: CardDB, state: GameState, idx: int, p: PlayerState,
+) -> list[PlayAggression]:
+    """PlayAggression 枚举(合法性口径见模块 docstring 侵略节)."""
+    if p.leader == effects.LEADER_GANDHI:
+        # 甘地卡文本: 你不能打出侵略或战争牌
+        return []
+    attacker_strength = civ_values(db, p).strength
+    actions: list[PlayAggression] = []
+    for card_id in dict.fromkeys(p.hand_military):
+        card = db.get(card_id)
+        if card.category is not CardCategory.AGGRESSION:
+            continue
+        # 未注册处理器的侵略牌不可打出(与行动卡同口径)
+        if card.handler not in AGGRESSION_HANDLERS:
+            continue
+        for target, tp in enumerate(state.players):
+            if target == idx:
+                continue
+            if _pact_blocks_attack(p, tp):
+                continue
+            # 规则书 p4: 不能攻击军力等级大于或等于你的玩家
+            if civ_values(db, tp).strength >= attacker_strength:
+                continue
+            if p.military_actions < aggression_cost(tp, card):
+                continue
+            actions.append(PlayAggression(card_id, target))
+    return actions
 
 
 def seed_event(db: CardDB, state: GameState, action: SeedEvent) -> GameState:
@@ -368,3 +435,465 @@ def _grant_colony(
     if immediate.get("military_card"):
         state = military.draw_military(state, idx, immediate["military_card"])
     return state
+
+
+# --- 侵略与防御响应(规则书 p4 发动侵略) ------------------------------------------
+
+KIND_AGGRESSION_DEFENSE = "aggression_defense"
+"""侵略防御响应 pending: responder=目标, context={card, attacker,
+attack_strength(快照), defense_bonus, defense_cards}."""
+
+KIND_AGGRESSION_PLUNDER = "aggression_plunder"
+"""plunder 受害者选择 pending: 失去共 amount 食物/资源(组合自选, 强制)."""
+
+KIND_AGGRESSION_RAID = "aggression_raid"
+"""raid 受害者选择 pending: 摧毁 1 个 <= max_age 级城市建筑(强制; 无合格
+建筑时 PassResponse 跳过)。链式多张时 context["loot"] 累计已毁造价。"""
+
+KIND_AGGRESSION_ANNEX = "aggression_annex"
+"""annex 受害者选择 pending: 选 1 个殖民地转交攻击方(强制)."""
+
+KIND_AGGRESSION_INFILTRATE = "aggression_infiltrate"
+"""infiltrate 受害者选择 pending: 弃 1 个领袖或 1 个未完成奇迹(强制)."""
+
+AGGRESSION_CHOICE_KINDS: frozenset[str] = frozenset({
+    KIND_AGGRESSION_PLUNDER,
+    KIND_AGGRESSION_RAID,
+    KIND_AGGRESSION_ANNEX,
+    KIND_AGGRESSION_INFILTRATE,
+})
+"""受害者选择类侵略 pending kind(ChooseEventOption 路由, 见
+apply_aggression_choice); 均为强制失去, 不可 DeclineResponse。"""
+
+ATTACK_BLOCKING_PACTS: frozenset[str] = frozenset({
+    "peace_treaty", "acceptance_of_supremacy", "loss_of_sovereignty",
+})
+"""停战类条约(条约文本含"不可攻击"): 生效中不可互相攻击/宣战.
+条约建模 T10 落地; 约定双方玩家 pacts 同录条约卡 id。"""
+
+GANDHI_COST_MULTIPLIER = 2
+"""甘地被动: 针对其文明的侵略/战争花费双倍军事行动(卡文本)."""
+
+_TECH_LEVEL = {Age.A: 1, Age.I: 2, Age.II: 3, Age.III: 4}
+"""卡牌等级(级 = 时代序, 时代 A 计 1 级; 与 effects._TECH_LEVEL 同口径)."""
+
+INFILTRATE_OPTION_LEADER = "leader"
+"""infiltrate 受害者选择: 弃当前领袖(其余 option 值为未完成奇迹卡 id)."""
+
+RAID_REQUIREMENTS: dict[str, tuple[Age, ...]] = {
+    "raid_i": (Age.I,),
+    "raid_ii": (Age.II, Age.I),
+    "raid_iii": (Age.III, Age.II),
+}
+"""raid 摧毁序列: 依次各摧毁 1 个 <= 该级(含 A)的城市建筑.
+卡牌数值表 p3: raid 受害图标为城市建筑图标(不含农场/矿场)。"""
+
+_AGE_LEVEL_ORDER = (Age.A, Age.I, Age.II, Age.III)
+"""raid 等级比较的时代序(IV 为终局标记, 卡牌不出现)."""
+
+AggressionHandler = Callable[[GameState, CardDB, int, int], GameState]
+"""侵略效果处理器签名: (state, db, attacker, victim) -> 新 state."""
+
+AGGRESSION_HANDLERS: dict[str, AggressionHandler] = {}
+"""侵略效果注册表: handler 名(= 卡 id) -> 处理器(注册见文件末尾)."""
+
+
+def aggression_cost(target: PlayerState, card: CardDefinition) -> int:
+    """侵略/战争军事行动费: 目标领袖为甘地时双倍(卡文本)."""
+    cost = card.military_cost
+    if target.leader == effects.LEADER_GANDHI:
+        cost *= GANDHI_COST_MULTIPLIER
+    return cost
+
+
+def _pact_blocks_attack(attacker: PlayerState, target: PlayerState) -> bool:
+    """停战类条约生效中(双方 pacts 同录同一条约卡 id)则不可攻击."""
+    return bool(
+        ATTACK_BLOCKING_PACTS & set(attacker.pacts) & set(target.pacts))
+
+
+def play_aggression(
+    db: CardDB, state: GameState, action: PlayAggression,
+) -> GameState:
+    """PlayAggression 结算: 付军事行动费, 揭示侵略卡, 压防御响应 pending.
+
+    合法性(目标军力严格更低/费用/条约/甘地)由 legal 保证; 攻击军力快照
+    入 context(响应期仅防御方变动, 判定以快照为准)。phase 保持 POLITICS
+    (pending 响应优先), 判定后由 _resolve_defense 置 ACTION。
+    """
+    idx = state.current_player
+    p = state.players[idx]
+    card = db.get(action.card_id)
+    cost = aggression_cost(state.players[action.target], card)
+    hand = list(p.hand_military)
+    hand.remove(action.card_id)
+    p = replace(
+        p, hand_military=tuple(hand),
+        military_actions=p.military_actions - cost)
+    state = replace_player(state, idx, p)
+    pending = PendingEffect(
+        KIND_AGGRESSION_DEFENSE, 0, responder=action.target,
+        context={
+            "card": action.card_id,
+            "attacker": idx,
+            "attack_strength": civ_values(db, p).strength,
+            "defense_bonus": 0,
+            "defense_cards": 0,
+        })
+    return replace(state, pending=state.pending + (pending,))
+
+
+def _bump_defense(
+    state: GameState, idx: int, card_id: str, bonus: int,
+) -> GameState:
+    """防御方用牌公共: 手牌移除入军事弃牌堆, defense_bonus/defense_cards 累加."""
+    p = state.players[idx]
+    hand = list(p.hand_military)
+    hand.remove(card_id)
+    state = replace_player(state, idx, replace(p, hand_military=tuple(hand)))
+    state = replace(
+        state, military_discard=state.military_discard + (card_id,))
+    pending = state.pending[0]
+    context = dict(pending.context)
+    context["defense_bonus"] = int(context.get("defense_bonus", 0)) + bonus
+    context["defense_cards"] = int(context.get("defense_cards", 0)) + 1
+    return replace(
+        state, pending=(replace(pending, context=context),) + state.pending[1:])
+
+
+def play_defense_bonus(
+    db: CardDB, state: GameState, action: PlayDefenseBonus,
+) -> GameState:
+    """PlayDefenseBonus 结算: 奖励牌防御数值临时加入防御方军力."""
+    return _bump_defense(
+        state, acting_index(state), action.card_id,
+        db.get(action.card_id).defense_bonus)
+
+
+def discard_for_strength(
+    db: CardDB, state: GameState, action: DiscardForStrength,
+) -> GameState:
+    """DiscardForStrength 结算: 面朝下弃 1 军事牌, 临时 +1 军力."""
+    return _bump_defense(state, acting_index(state), action.card_id, 1)
+
+
+def pass_response(db: CardDB, state: GameState) -> GameState:
+    """PassResponse 结算: 防御判定(aggression_defense)或 raid 跳过摧毁.
+
+    合法性由 legal 保证(仅这两类 pending 生成 PassResponse)。
+    """
+    if not state.pending:  # pragma: no cover - legal 已排除
+        msg = "当前无可响应的 pending"
+        raise IllegalActionError(msg)
+    pending = state.pending[0]
+    if pending.kind == KIND_AGGRESSION_DEFENSE:
+        return _resolve_defense(db, state, pending)
+    if pending.kind == KIND_AGGRESSION_RAID:
+        state = replace(state, pending=state.pending[1:])
+        return _raid_advance(
+            db, state, int(pending.context["attacker"]),
+            int(pending.context["loot"]))
+    msg = f"pending {pending.kind!r} 不接受 PassResponse"  # pragma: no cover
+    raise IllegalActionError(msg)  # pragma: no cover
+
+
+def _resolve_defense(
+    db: CardDB, state: GameState, pending: PendingEffect,
+) -> GameState:
+    """侵略判定: 防御方军力(civ + 奖励) >= 攻击快照 -> 失败; 否则结算效果.
+
+    两种结果侵略牌均入军事弃牌堆(规则书 p4: 弃置相应的侵略牌); 结算后
+    phase -> ACTION(每回合限 1 政治行动)。
+    """
+    context = pending.context
+    card_id = str(context["card"])
+    attacker = int(context["attacker"])
+    victim = acting_index(state)
+    defense = (
+        civ_values(db, state.players[victim]).strength
+        + int(context["defense_bonus"])
+    )
+    state = replace(
+        state, pending=state.pending[1:], phase=Phase.ACTION,
+        military_discard=state.military_discard + (card_id,))
+    if defense >= int(context["attack_strength"]):
+        return state
+    handler = AGGRESSION_HANDLERS[db.get(card_id).handler]
+    return handler(state, db, attacker, victim)
+
+
+def apply_aggression_choice(
+    db: CardDB, state: GameState, option: str,
+) -> GameState:
+    """受害者选择类侵略 pending 的 ChooseEventOption 结算(强制失去)."""
+    if not state.pending:  # pragma: no cover - legal 已排除
+        msg = "无待结算的侵略 pending"
+        raise ValueError(msg)
+    pending = state.pending[0]
+    if pending.kind == KIND_AGGRESSION_PLUNDER:
+        return _plunder_settle(db, state, pending, option)
+    if pending.kind == KIND_AGGRESSION_RAID:
+        return _raid_destroy(db, state, pending, option)
+    if pending.kind == KIND_AGGRESSION_ANNEX:
+        return _annex_settle(db, state, pending, option)
+    if pending.kind == KIND_AGGRESSION_INFILTRATE:
+        return _infiltrate_settle(db, state, pending, option)
+    msg = f"pending {pending.kind!r} 不接受 ChooseEventOption"  # pragma: no cover
+    raise ValueError(msg)  # pragma: no cover
+
+
+# --- 侵略效果处理器(handler 名 = 卡 id) -----------------------------------------
+
+
+def _enslave_i(state: GameState, db: CardDB, attacker: int, victim: int) -> GameState:
+    """enslave_i: 受害者 -1 人口; 攻击方 +2 食物 +2 资源(独立效果)."""
+    state = replace_player(
+        state, victim, events.lose_population(state.players[victim], 1))
+    p = state.players[attacker]
+    p = economy.gain_tokens(db, p, "food", 2)
+    p = economy.gain_tokens(db, p, "resource", 2)
+    return replace_player(state, attacker, p)
+
+
+def _plunder(amount: int) -> AggressionHandler:
+    """plunder 工厂: 压受害者选择 pending(失去共 amount 食物/资源)."""
+
+    def handler(
+        state: GameState, db: CardDB, attacker: int, victim: int,
+    ) -> GameState:
+        pending = PendingEffect(
+            KIND_AGGRESSION_PLUNDER, 0, responder=victim,
+            context={"attacker": attacker, "amount": amount})
+        return replace(state, pending=state.pending + (pending,))
+
+    return handler
+
+
+def plunder_options(amount: int) -> tuple[str, ...]:
+    """plunder 合法 option: 食物/资源组合, 按价值合计 amount(恒可执行,
+    不足由 settle_loss 封顶)。"""
+    options: list[str] = []
+    for food in range(amount, -1, -1):
+        resource = amount - food
+        parts: list[str] = []
+        if food:
+            parts.append(f"food:{food}")
+        if resource:
+            parts.append(f"resource:{resource}")
+        options.append(",".join(parts))
+    return tuple(options)
+
+
+def _plunder_settle(
+    db: CardDB, state: GameState, pending: PendingEffect, option: str,
+) -> GameState:
+    """plunder 选择结算: 受害者按组合失去(不足封顶), 攻击方获得实失量."""
+    victim = acting_index(state)
+    attacker = int(pending.context["attacker"])
+    state = replace(state, pending=state.pending[1:])
+    for kind, amount in events.parse_mix(option):
+        p, paid = economy.settle_loss(db, state.players[victim], kind, amount)
+        state = replace_player(state, victim, p)
+        if paid:
+            a = economy.gain_value(db, state.players[attacker], kind, paid)
+            state = replace_player(state, attacker, a)
+    return state
+
+
+def raid_eligible_building_ids(
+    db: CardDB, p: PlayerState, max_age: Age,
+) -> list[str]:
+    """raid 可摧毁的城市建筑卡 id(有工人且等级 <= max_age, 含 A)."""
+    limit = _AGE_LEVEL_ORDER.index(max_age)
+    ids: list[str] = []
+    for category in sorted(URBAN_CATEGORIES, key=lambda c: c.value):
+        for card_id, workers in sorted(p.buildings.get(category.value, {}).items()):
+            if workers < 1:
+                continue
+            if _AGE_LEVEL_ORDER.index(db.get(card_id).age) <= limit:
+                ids.append(card_id)
+    return ids
+
+
+def _raid(requirements: tuple[Age, ...]) -> AggressionHandler:
+    """raid 工厂: 按摧毁序列压链式 pending(loot 累计已毁建筑造价)."""
+
+    def handler(
+        state: GameState, db: CardDB, attacker: int, victim: int,
+    ) -> GameState:
+        chain = tuple(
+            PendingEffect(
+                KIND_AGGRESSION_RAID, 0, responder=victim,
+                context={
+                    "attacker": attacker, "max_age": max_age.value, "loot": 0,
+                })
+            for max_age in requirements
+        )
+        return replace(state, pending=state.pending + chain)
+
+    return handler
+
+
+def _raid_destroy(
+    db: CardDB, state: GameState, pending: PendingEffect, option: str,
+) -> GameState:
+    """raid 摧毁结算: 所选建筑 -1 工人回空闲池, loot 累加其造价(卡面费,
+    规则书 p4: 涉及卡牌费用时不作任何修正), 链尽后攻击方 +ceil(loot/2) 资源。
+    """
+    victim = acting_index(state)
+    attacker = int(pending.context["attacker"])
+    card = db.get(option)
+    p = state.players[victim]
+    buildings = dict(p.buildings)
+    slots = dict(buildings[card.category.value])
+    left = slots[option] - 1
+    if left > 0:
+        slots[option] = left
+    else:
+        del slots[option]
+    buildings[card.category.value] = slots
+    state = replace_player(
+        state, victim,
+        replace(p, buildings=buildings, worker_pool=p.worker_pool + 1))
+    loot = int(pending.context["loot"]) + card.build_cost
+    state = replace(state, pending=state.pending[1:])
+    return _raid_advance(db, state, attacker, loot)
+
+
+def _raid_advance(
+    db: CardDB, state: GameState, attacker: int, loot: int,
+) -> GameState:
+    """raid 链推进: 下一段 pending 继承 loot; 链尽攻击方 +ceil(loot/2) 资源."""
+    if state.pending and state.pending[0].kind == KIND_AGGRESSION_RAID:
+        nxt = state.pending[0]
+        context = dict(nxt.context)
+        context["loot"] = loot
+        return replace(
+            state, pending=(replace(nxt, context=context),) + state.pending[1:])
+    if loot > 0:
+        p = economy.gain_value(db, state.players[attacker], "resource",
+                               (loot + 1) // 2)
+        state = replace_player(state, attacker, p)
+    return state
+
+
+def _annex_ii(state: GameState, db: CardDB, attacker: int, victim: int) -> GameState:
+    """annex_ii: 受害者有殖民地时压选择 pending(无则无效果)."""
+    if not state.players[victim].colonies:
+        return state
+    pending = PendingEffect(
+        KIND_AGGRESSION_ANNEX, 0, responder=victim,
+        context={"attacker": attacker})
+    return replace(state, pending=state.pending + (pending,))
+
+
+def _annex_settle(
+    db: CardDB, state: GameState, pending: PendingEffect, option: str,
+) -> GameState:
+    """annex 选择结算: 殖民地转移(含永久效果); 黄/蓝标记受害者归还、
+    攻击方自配件盒取得(与 politics._grant_colony 获得时口径互逆, 下限 0)。
+    """
+    victim = acting_index(state)
+    attacker = int(pending.context["attacker"])
+    state = replace(state, pending=state.pending[1:])
+    permanent = db.get(option).territory_permanent
+    yellow = permanent.get("yellow_token", 0)
+    blue = permanent.get("blue_token", 0)
+    p = state.players[victim]
+    colonies = list(p.colonies)
+    colonies.remove(option)
+    p = replace(
+        p, colonies=tuple(colonies),
+        yellow_bank=max(0, p.yellow_bank - yellow),
+        blue_bank=max(0, p.blue_bank - blue))
+    state = replace_player(state, victim, p)
+    a = state.players[attacker]
+    a = replace(
+        a, colonies=a.colonies + (option,),
+        yellow_bank=max(0, a.yellow_bank + yellow),
+        blue_bank=max(0, a.blue_bank + blue))
+    return replace_player(state, attacker, a)
+
+
+def _infiltrate_ii(state: GameState, db: CardDB, attacker: int, victim: int) -> GameState:
+    """infiltrate_ii: 受害者有领袖或未完成奇迹时压选择 pending(无则无效果)."""
+    p = state.players[victim]
+    if p.leader is None and p.wonder_progress is None:
+        return state
+    pending = PendingEffect(
+        KIND_AGGRESSION_INFILTRATE, 0, responder=victim,
+        context={"attacker": attacker})
+    return replace(state, pending=state.pending + (pending,))
+
+
+def infiltrate_options(p: PlayerState) -> list[str]:
+    """infiltrate 合法 option: "leader"(有领袖时)/未完成奇迹卡 id."""
+    options: list[str] = []
+    if p.leader is not None:
+        options.append(INFILTRATE_OPTION_LEADER)
+    if p.wonder_progress is not None:
+        options.append(p.wonder_progress[0])
+    return options
+
+
+def _infiltrate_settle(
+    db: CardDB, state: GameState, pending: PendingEffect, option: str,
+) -> GameState:
+    """infiltrate 选择结算: 弃领袖(入弃牌堆)或未完成奇迹(已付阶段蓝点
+    退回供给区后入 removed, 同时代结束过期口径); 攻击方 +3 文化/级。"""
+    victim = acting_index(state)
+    attacker = int(pending.context["attacker"])
+    state = replace(state, pending=state.pending[1:])
+    p = state.players[victim]
+    if option == INFILTRATE_OPTION_LEADER:
+        card_id = str(p.leader)
+        level = _TECH_LEVEL[db.get(card_id).age]
+        state = replace(state, discard=state.discard + (card_id,))
+        p = replace(p, leader=None)
+    else:
+        card_id, stages_done = p.wonder_progress  # type: ignore[misc]
+        level = _TECH_LEVEL[db.get(card_id).age]
+        p = replace(p, wonder_progress=None,
+                    blue_bank=p.blue_bank + stages_done)
+        state = replace(state, removed=state.removed + (card_id,))
+    state = replace_player(state, victim, p)
+    a = state.players[attacker]
+    return replace_player(
+        state, attacker, replace(a, culture=a.culture + 3 * level))
+
+
+def _spy_ii(state: GameState, db: CardDB, attacker: int, victim: int) -> GameState:
+    """spy_ii: 受害者 -5 科技(下限 0); 攻击方 +等量文化(PDF: Scores same
+    amount, 按实失量)。"""
+    p = state.players[victim]
+    lost = min(5, p.science)
+    state = replace_player(state, victim, replace(p, science=p.science - lost))
+    a = state.players[attacker]
+    return replace_player(state, attacker, replace(a, culture=a.culture + lost))
+
+
+def _armed_intervention_iii(
+    state: GameState, db: CardDB, attacker: int, victim: int,
+) -> GameState:
+    """armed_intervention_iii: 受害者 -7 文化(下限 0); 攻击方 +7 文化
+    (卡面为两个独立效果, 攻击方收益不随受害者实失量封顶)。"""
+    p = state.players[victim]
+    state = replace_player(
+        state, victim, replace(p, culture=max(0, p.culture - 7)))
+    a = state.players[attacker]
+    return replace_player(state, attacker, replace(a, culture=a.culture + 7))
+
+
+AGGRESSION_HANDLERS.update({
+    "enslave_i": _enslave_i,
+    "plunder_i": _plunder(3),
+    "plunder_ii": _plunder(5),
+    "plunder_iii": _plunder(7),
+    "raid_i": _raid(RAID_REQUIREMENTS["raid_i"]),
+    "raid_ii": _raid(RAID_REQUIREMENTS["raid_ii"]),
+    "raid_iii": _raid(RAID_REQUIREMENTS["raid_iii"]),
+    "annex_ii": _annex_ii,
+    "infiltrate_ii": _infiltrate_ii,
+    "spy_ii": _spy_ii,
+    "armed_intervention_iii": _armed_intervention_iii,
+})

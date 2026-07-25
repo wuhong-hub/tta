@@ -207,20 +207,20 @@ def apply_event_choice(
     if pending.kind == KIND_EVENT_FORAY:
         # foray: 按所选组合生产(按价值, 见 economy.gain_value)
         p = state.players[idx]
-        for kind, amount in _parse_mix(option):
+        for kind, amount in parse_mix(option):
             p = economy.gain_value(db, p, kind, amount)
         return replace_player(state, idx, p)
     if pending.kind == KIND_EVENT_RAIDERS:
         # raiders: 按所选组合失去(不足部分损失到此为止)
         p = state.players[idx]
-        for kind, amount in _parse_mix(option):
+        for kind, amount in parse_mix(option):
             p, _ = economy.settle_loss(db, p, kind, amount)
         return replace_player(state, idx, p)
     msg = f"pending {pending.kind!r} 不接受 ChooseEventOption"  # pragma: no cover
     raise ValueError(msg)  # pragma: no cover
 
 
-def _parse_mix(option: str) -> tuple[tuple[str, int], ...]:
+def parse_mix(option: str) -> tuple[tuple[str, int], ...]:
     """解析 "food:2,resource:1" 形式的组合 option 为 ((kind, 数量), ...)."""
     parts: list[tuple[str, int]] = []
     for chunk in option.split(","):
@@ -407,7 +407,7 @@ def _clockwise_sorted(state: GameState, seats: list[int]) -> list[int]:
     return sorted(seats, key=lambda seat: _clockwise_distance(state, seat))
 
 
-def _lose_population(p: PlayerState, count: int) -> PlayerState:
+def lose_population(p: PlayerState, count: int) -> PlayerState:
     """失去人口: 优先空闲工人池, 不足按 (类别, card_id) 字典序从卡上移除.
 
     失去的黄点回到黄点银行(官方规则, 如 emigration 注记 return to yellow
@@ -458,7 +458,7 @@ def _barbarians(state: GameState, db: CardDB) -> GameState:
     leader = _extreme_seats(state, cultures, strongest=True)[0]
     if leader in _weakest_seats(db, state):
         state = replace_player(
-            state, leader, _lose_population(state.players[leader], 1))
+            state, leader, lose_population(state.players[leader], 1))
     return state
 
 
@@ -529,7 +529,7 @@ def _new_deposits(state: GameState, db: CardDB) -> GameState:
 def _pestilence(state: GameState, db: CardDB) -> GameState:
     """每个文明 -1 人口."""
     for i, p in enumerate(state.players):
-        state = replace_player(state, i, _lose_population(p, 1))
+        state = replace_player(state, i, lose_population(p, 1))
     return state
 
 
@@ -585,7 +585,7 @@ def _reign_of_terror(state: GameState, db: CardDB) -> GameState:
     """最弱文明 -1 人口."""
     weakest = _weakest_seats(db, state)[0]
     return replace_player(
-        state, weakest, _lose_population(state.players[weakest], 1))
+        state, weakest, lose_population(state.players[weakest], 1))
 
 
 def _scientific_breakthrough(state: GameState, db: CardDB) -> GameState:

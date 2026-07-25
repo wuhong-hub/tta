@@ -30,11 +30,15 @@ from tta.engine.actions import (
     DevelopGovernment,
     DevelopTech,
     Disband,
+    DiscardForStrength,
     DiscardMilitary,
     IllegalActionError,
     IncreasePopulation,
+    PassResponse,
     PassTurn,
     PlayActionCard,
+    PlayAggression,
+    PlayDefenseBonus,
     PlayLeader,
     PlayTactics,
     SeedEvent,
@@ -75,7 +79,19 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
         return replace(state, pending=state.pending[1:])
     if isinstance(action, SeedEvent):
         return politics.seed_event(db, state, action)
+    if isinstance(action, PlayAggression):
+        return politics.play_aggression(db, state, action)
+    if isinstance(action, PlayDefenseBonus):
+        return politics.play_defense_bonus(db, state, action)
+    if isinstance(action, DiscardForStrength):
+        return politics.discard_for_strength(db, state, action)
+    if isinstance(action, PassResponse):
+        return politics.pass_response(db, state)
     if isinstance(action, ChooseEventOption):
+        if (state.pending
+                and state.pending[0].kind in politics.AGGRESSION_CHOICE_KINDS):
+            # 受害者选择类侵略 pending(强制失去)由 politics 结算
+            return politics.apply_aggression_choice(db, state, action.option)
         return events.apply_event_choice(db, state, action.option)
     if isinstance(action, ColonizeBid):
         return politics.colonize_bid(db, state, action)

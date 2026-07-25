@@ -48,10 +48,13 @@ from tta.engine.actions import (
     DevelopGovernment,
     DevelopTech,
     Disband,
+    DiscardForStrength,
     DiscardMilitary,
     IncreasePopulation,
+    PassResponse,
     PassTurn,
     PlayActionCard,
+    PlayDefenseBonus,
     PlayLeader,
     PlayTactics,
     SkipPolitics,
@@ -373,7 +376,53 @@ def _pending_actions(
         return _colonize_bid_actions(db, p, pending)
     if pending.kind == politics.KIND_COLONIZE_SACRIFICE:
         return _colonize_sacrifice_actions(db, p, pending)
+    if pending.kind == politics.KIND_AGGRESSION_DEFENSE:
+        return _aggression_defense_actions(db, p, pending)
+    if pending.kind == politics.KIND_AGGRESSION_PLUNDER:
+        # plunder: 食物/资源组合(按价值共 amount), 恒可执行(不足封顶)
+        amount = int(pending.context["amount"])
+        return [ChooseEventOption(option)
+                for option in politics.plunder_options(amount)]
+    if pending.kind == politics.KIND_AGGRESSION_RAID:
+        # raid: 选 1 个 <= max_age 级城市建筑摧毁(强制); 无合格建筑时
+        # PassResponse 跳过该次摧毁(受害者没有可失去的建筑, 不卡死)
+        actions = [
+            ChooseEventOption(card_id)
+            for card_id in politics.raid_eligible_building_ids(
+                db, p, Age(str(pending.context["max_age"])))
+        ]
+        if not actions:
+            actions.append(PassResponse())
+        return actions
+    if pending.kind == politics.KIND_AGGRESSION_ANNEX:
+        # annex: 选 1 个殖民地转交攻击方(强制; 压入前已保证非空)
+        return [ChooseEventOption(colony) for colony in p.colonies]
+    if pending.kind == politics.KIND_AGGRESSION_INFILTRATE:
+        # infiltrate: 弃领袖或未完成奇迹(强制; 压入前已保证非空)
+        return [ChooseEventOption(option)
+                for option in politics.infiltrate_options(p)]
     return []
+
+
+def _aggression_defense_actions(
+    db: CardDB, p: PlayerState, pending: PendingEffect,
+) -> list[Action]:
+    """侵略防御响应: 奖励牌 / 弃牌 +1 军力 / PassResponse.
+
+    规则书 p4 限制: 打出+弃置的牌总数不能超过防御方总军事行动点数
+    (defense_cards 计数, 达上限后仅剩 PassResponse)。PassResponse 恒可用
+    (对手可不与你比较, 规则书 p4)。
+    """
+    actions: list[Action] = []
+    used = int(pending.context.get("defense_cards", 0))
+    if used < p.military_actions:
+        for card_id in dict.fromkeys(p.hand_military):
+            card = db.get(card_id)
+            if card.category is CardCategory.BONUS and card.defense_bonus > 0:
+                actions.append(PlayDefenseBonus(card_id))
+            actions.append(DiscardForStrength(card_id))
+    actions.append(PassResponse())
+    return actions
 
 
 def _colonize_bid_actions(

@@ -108,10 +108,33 @@ class SeedEvent:
 
 @dataclass(frozen=True)
 class PlayAggression:
-    """打出侵略牌(类型与序列化 P2-T5; 结算 T8)."""
+    """打出侵略牌(政治行动, 结算见 politics.play_aggression): 付军事行动费,
+    压 aggression_defense pending 由目标响应(规则书 p4 发动侵略)。"""
 
     card_id: str
     target: int
+
+
+@dataclass(frozen=True)
+class PlayDefenseBonus:
+    """防御响应: 打出手中军事奖励牌, 防御数值临时加入军力(可多张).
+
+    打出与弃置的牌总数不能超过防御方总军事行动点数(规则书 p4 限制)。
+    """
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class DiscardForStrength:
+    """防御响应: 面朝下弃 1 张军事牌, 临时 +1 军力(可多张, 上限同上)."""
+
+    card_id: str
+
+
+@dataclass(frozen=True)
+class PassResponse:
+    """防御响应结束(侵略判定)/无合格建筑时跳过本次 raid 摧毁."""
 
 
 @dataclass(frozen=True)
@@ -224,6 +247,7 @@ Action = (
     | DeclineResponse | SeedEvent | PlayAggression | DeclareWar
     | ProposePact | CancelPact | Resign | ChooseEventOption
     | ColonizeBid | ColonizePass | ColonizePlayBonus | ColonizeSacrifice
+    | PlayDefenseBonus | DiscardForStrength | PassResponse
 )
 
 _ACTION_TYPES: dict[str, type] = {
@@ -255,6 +279,9 @@ _ACTION_TYPES: dict[str, type] = {
     "colonize_pass": ColonizePass,
     "colonize_play_bonus": ColonizePlayBonus,
     "colonize_sacrifice": ColonizeSacrifice,
+    "play_defense_bonus": PlayDefenseBonus,
+    "discard_for_strength": DiscardForStrength,
+    "pass_response": PassResponse,
 }
 _TYPE_NAMES: dict[type, str] = {v: k for k, v in _ACTION_TYPES.items()}
 

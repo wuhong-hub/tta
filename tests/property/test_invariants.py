@@ -41,6 +41,7 @@ from collections import Counter
 import pytest
 
 from tta.cards import build_card_db
+from tta.engine import politics
 from tta.engine.actions import DevelopTech, SeedEvent
 from tta.engine.apply import apply
 from tta.engine.enums import Age, DeckType
@@ -110,6 +111,14 @@ def _accounted(state: GameState) -> Counter:
     accounted.update(state.current_events)
     accounted.update(state.future_events)
     accounted.update(state.past_events)
+    # 响应中的在途牌: 侵略揭示卡(aggression_defense pending context)与
+    # 竞拍/牺牲中的地区牌(colonize pending context)暂不在任何牌域
+    for e in state.pending:
+        if e.kind == politics.KIND_AGGRESSION_DEFENSE:
+            accounted.update([str(e.context["card"])])
+        elif e.kind in (politics.KIND_COLONIZE_BID,
+                        politics.KIND_COLONIZE_SACRIFICE):
+            accounted.update([str(e.context["territory"])])
     for p in state.players:
         accounted.update(p.hand_civil)
         accounted.update(p.hand_military)
