@@ -1075,7 +1075,8 @@ def declare_war(db: CardDB, state: GameState, action: DeclareWar) -> GameState:
 
     合法性由 legal 保证(见 _war_actions)。战争在宣告者的下个回合开始
     阶段结算(规则书 p4, 见 resolve_declared_wars), 宣告当回合不结算;
-    phase -> ACTION(每回合限 1 政治行动)。
+    相位经 _after_political_action(Caesar 可回 POLITICS, 否则 -> ACTION,
+    每回合限 1 政治行动)。
     """
     idx = state.current_player
     p = state.players[idx]

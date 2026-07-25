@@ -448,6 +448,28 @@ def test_immigration_most_happiness_only_and_bank_required() -> None:
     assert new.players[2].yellow_bank == 0
 
 
+def test_immigration_skips_resigned_player() -> None:
+    # 3 人局 P1 已退出且笑脸最高(建筑冻结保留): 不参与比较与生效,
+    # 在局玩家(笑脸 0 平局)不受影响全部 +1 人口(规则书 p4: 退出者文明移出游戏)
+    db = build_card_db()
+    resigned = _player("P1", resigned=True, buildings={
+        "farm": {"agriculture": 2}, "mine": {"bronze": 2},
+        "lab": {"philosophy": 1}, "infantry": {"warriors": 1},
+        "temple": {"religion": 1},
+    })
+    state = _state(
+        num_players=3, players=(_player("P0"), resigned, _player("P2")),
+        current_events=("immigration", "development_of_science"),
+    )
+    new = _reveal(db, state)
+    assert new.players[0].worker_pool == 2
+    assert new.players[0].yellow_bank == 17
+    assert new.players[2].worker_pool == 2
+    assert new.players[2].yellow_bank == 17
+    # 退出者状态不变(不获人口, 也不阻断在局玩家)
+    assert new.players[1] == resigned
+
+
 # --- pestilence -----------------------------------------------------------------
 
 

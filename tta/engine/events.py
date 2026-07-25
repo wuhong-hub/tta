@@ -531,15 +531,19 @@ def _good_harvest(state: GameState, db: CardDB) -> GameState:
 
 
 def _immigration(state: GameState, db: CardDB) -> GameState:
-    """笑脸最多的所有文明(平局全部)免费 +1 人口(黄点银行非空才生效)."""
+    """笑脸最多的所有文明(平局全部)免费 +1 人口(黄点银行非空才生效).
+
+    已体面退出者(resigned)不参与比较与生效(规则书 p4: 其文明移出游戏),
+    与其他全员事件口径一致。
+    """
     happiness = [
         civ_values(db, p, state.players, i).happiness
         for i, p in enumerate(state.players)
     ]
-    best = max(happiness)
-    for i, p in enumerate(state.players):
-        if p.resigned:
-            continue
+    active = active_indices(state)
+    best = max(happiness[i] for i in active)
+    for i in active:
+        p = state.players[i]
         if happiness[i] == best and p.yellow_bank > 0:
             state = replace_player(state, i, replace(
                 p, yellow_bank=p.yellow_bank - 1,
