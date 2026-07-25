@@ -13,10 +13,9 @@ apply_event_choice)或事件免费建造的 Build(见 EVENT_FREE_BUILD)。
 from collections.abc import Callable
 from dataclasses import replace
 
-from tta.engine import economy, effects
+from tta.engine import economy, effects, military
 from tta.engine.enums import Age
 from tta.engine.model import CardDB
-from tta.engine.rng import rng_shuffle
 from tta.engine.state import (
     GameState,
     PendingEffect,
@@ -35,8 +34,10 @@ KIND_EVENT_WARFARE = "event_warfare"
 """development_of_warfare 免费建造 pending: responder 可免费建 warriors."""
 
 KIND_EVENT_CIVILIZATION = "event_civilization"
-"""development_of_civilization 选择 pending: responder 三选一(见
-CIVILIZATION_OPTION_PENDING)或 DeclineResponse."""
+"""development_of_civilization 选择 pending: responder 三选一(官方口径:
+人口/建造/研发; 建造在引擎中拆为 farm_mine 与 urban 两个 option, 见
+CIVILIZATION_OPTION_PENDING 与 CIVILIZATION_OPTION_POPULATION)或
+DeclineResponse."""
 
 EVENT_FREE_BUILD: dict[str, str] = {
     KIND_EVENT_RELIGION: "religion",
@@ -57,16 +58,23 @@ DECLINABLE_PENDING_KINDS: frozenset[str] = (
 )
 """可放弃 pending kind 全量白名单(行动卡子行动类 ∪ 事件选择类)."""
 
+CIVILIZATION_OPTION_POPULATION = "population"
+"""development_of_civilization 人口选项(官方选项 ①): +1 人口并付 1 食物."""
+
+CIVILIZATION_POPULATION_FOOD_COST = 1
+"""人口选项的食物费(事件固定价 1 食物, 非轨道人口费, moses 折扣不适用)."""
+
 CIVILIZATION_OPTION_PENDING: dict[str, tuple[str, int]] = {
     "farm_mine": (effects.KIND_BUILD_FARM_MINE, 1),
     "urban": (effects.KIND_BUILD_URBAN, 1),
     "tech": (effects.KIND_DEVELOP_TECH, 1),
 }
-"""development_of_civilization 选项 -> (子 pending kind, 折扣).
+"""development_of_civilization 折扣选项 -> (子 pending kind, 折扣).
 
 SIMPLIFICATION(brief 口径): "-1 食物建农场/矿场"与"-1 资源建城市建筑"
 统一实现为建造折扣 1(引擎支付以资源计); "-1 科技研发科技"实现为
-develop_tech pending 的科技费折扣 1。
+develop_tech pending 的科技费折扣 1。人口选项(①)无子 pending, 选择即
+结算, 不在本表(见 CIVILIZATION_OPTION_POPULATION)。
 """
 
 EVENT_HANDLERS: dict[str, Callable[[GameState, CardDB], GameState]] = {}
@@ -111,6 +119,13 @@ def apply_event_choice(
         p = economy.gain_tokens(db, state.players[idx], option, MARKETS_GAIN)
         return replace_player(state, idx, p)
     if pending.kind == KIND_EVENT_CIVILIZATION:
+        if option == CIVILIZATION_OPTION_POPULATION:
+            # 官方选项 ①: +1 人口并付 1 食物(事件固定价, moses 折扣不适用)
+            p = state.players[idx]
+            p = replace(p, yellow_bank=p.yellow_bank - 1,
+                        worker_pool=p.worker_pool + 1)
+            p = economy.pay(db, p, "food", CIVILIZATION_POPULATION_FOOD_COST)
+            return replace_player(state, idx, p)
         spec = CIVILIZATION_OPTION_PENDING.get(option)
         if spec is None:  # pragma: no cover - legal 已排除
             msg = f"事件 {pending.kind!r} 无选项 {option!r}"
@@ -122,7 +137,7 @@ def apply_event_choice(
     raise ValueError(msg)  # pragma: no cover
 
 
-# --- pending 链与抓牌辅助 -------------------------------------------------------
+# --- pending 链辅助 ----------------------------------------------------------
 
 
 def _seat_order(state: GameState) -> list[int]:
@@ -157,30 +172,6 @@ def _push_free_build_chain(state: GameState, kind: str, card_id: str) -> GameSta
     return _push_chain(state, kind, seats)
 
 
-def _draw_military(state: GameState, idx: int, count: int) -> GameState:
-    """从军事牌堆抓 count 张入 idx 手(牌堆空切洗军事弃牌堆; 时代 IV 不抓).
-
-    与 turn._draw_military 同一官方口径(规则书 p7), 供事件效果调用。
-    """
-    if state.age is Age.IV or count <= 0:
-        return state
-    deck = list(state.military_deck)
-    discard = list(state.military_discard)
-    hand = list(state.players[idx].hand_military)
-    rng = state.rng_state
-    for _ in range(count):
-        if not deck:
-            if not discard:
-                break
-            rng, deck = rng_shuffle(rng, discard)
-            discard = []
-        hand.append(deck.pop(0))
-    state = replace(state, military_deck=tuple(deck),
-                    military_discard=tuple(discard), rng_state=rng)
-    return replace_player(
-        state, idx, replace(state.players[idx], hand_military=tuple(hand)))
-
-
 # --- Age A 事件 handler(卡牌数值表 p4 文本) --------------------------------------
 
 
@@ -198,7 +189,7 @@ def _development_of_agriculture(state: GameState, db: CardDB) -> GameState:
 
 
 def _development_of_civilization(state: GameState, db: CardDB) -> GameState:
-    """每名玩家三选一(brief 口径): -1 建农场/矿场 | -1 建城市建筑 | -1 研发."""
+    """每名玩家三选一(官方口径): +1 人口付 1 食物 | -1 建造 | -1 研发."""
     return _push_chain(state, KIND_EVENT_CIVILIZATION, _seat_order(state))
 
 
@@ -215,7 +206,7 @@ def _development_of_markets(state: GameState, db: CardDB) -> GameState:
 def _development_of_politics(state: GameState, db: CardDB) -> GameState:
     """每名玩家 +3 张军事牌(从 current_player 起顺时针, 共享军事牌堆)."""
     for seat in _seat_order(state):
-        state = _draw_military(state, seat, POLITICS_DRAW)
+        state = military.draw_military(state, seat, POLITICS_DRAW)
     return state
 
 

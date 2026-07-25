@@ -600,3 +600,60 @@ def test_event_civilization_tech_option_not_offered_when_unaffordable() -> None:
     legal = legal_actions(db, new)
     assert ChooseEventOption("tech") not in legal
     assert DeclineResponse() in legal
+
+
+def test_event_civilization_population_option_settles() -> None:
+    db = build_card_db()
+    # 黄点 18 / 工人 1 / 食物 2(agriculture 上 2 蓝点)
+    p0 = _player("P0", card_tokens={"agriculture": 2})
+    state = _state(
+        players=(p0, _player("P1")),
+        current_events=("development_of_civilization", "development_of_crafts"),
+    )
+    new = _reveal(db, state)
+    legal = legal_actions(db, new)
+    assert ChooseEventOption("population") in legal
+    # 选人口: 黄点 -1、工人 +1、食物 -1(事件固定价 1), 无子 pending
+    new = apply(new, ChooseEventOption("population"), db)
+    p = new.players[0]
+    assert p.yellow_bank == 17
+    assert p.worker_pool == 2
+    assert p.card_tokens == {"agriculture": 1}
+    assert p.blue_bank == 17  # 支付的蓝点放回供给区
+    assert [e.responder for e in new.pending] == [1]
+    assert new.pending[0].kind == events.KIND_EVENT_CIVILIZATION
+
+
+def test_event_civilization_all_four_options_offered() -> None:
+    db = build_card_db()
+    # 人口(黄点+食物)、农场空槽、城市建筑资源、科技折扣研发 全部可行
+    p0 = _player("P0", worker_pool=1, science=4, hand_civil=("iron",),
+                 card_tokens={"agriculture": 1, "bronze": 2},
+                 developed=_INITIAL_DEVELOPED + ("agriculture",))
+    state = _state(
+        players=(p0, _player("P1")),
+        current_events=("development_of_civilization", "development_of_crafts"),
+    )
+    new = _reveal(db, state)
+    legal = legal_actions(db, new)
+    assert ChooseEventOption("population") in legal
+    assert ChooseEventOption("farm_mine") in legal
+    assert ChooseEventOption("urban") in legal
+    assert ChooseEventOption("tech") in legal
+    assert DeclineResponse() in legal
+
+
+def test_event_civilization_population_not_offered_without_food() -> None:
+    db = build_card_db()
+    # 无食物(农场卡上无蓝点): 人口选项不出现, 其余选项照常
+    p0 = _player("P0", worker_pool=1, card_tokens={"bronze": 2},
+                 developed=_INITIAL_DEVELOPED + ("agriculture",))
+    state = _state(
+        players=(p0, _player("P1")),
+        current_events=("development_of_civilization", "development_of_crafts"),
+    )
+    new = _reveal(db, state)
+    legal = legal_actions(db, new)
+    assert ChooseEventOption("population") not in legal
+    assert ChooseEventOption("farm_mine") in legal
+    assert DeclineResponse() in legal

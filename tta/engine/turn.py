@@ -48,10 +48,9 @@ advance(state, db) 流程:
 
 from dataclasses import replace
 
-from tta.engine import civ, economy, effects
+from tta.engine import civ, economy, effects, military
 from tta.engine.enums import Age, Phase
 from tta.engine.model import CardDB
-from tta.engine.rng import rng_shuffle
 from tta.engine.state import (
     ROW_SLOTS,
     GameState,
@@ -162,30 +161,15 @@ def end_of_turn(state: GameState, db: CardDB) -> GameState:
 def _draw_military(
     state: GameState, p: PlayerState,
 ) -> tuple[GameState, PlayerState]:
-    """回合末抓军事牌: min(剩余红点, 3) 张从 military_deck 顶抓入手.
+    """回合末抓军事牌: min(剩余红点, 3) 张从军事牌堆顶抓入手.
 
-    官方规则(规则书 p7): 抓到军事牌堆最后一张时, 切洗当前时代的军事
-    弃牌堆重置牌堆继续抓; 弃牌堆也空则抓不到。时代 IV 无军事牌堆, 不抓。
+    抓牌共用实现见 military.draw_military(与事件效果同一官方口径);
+    p 尚未写回 state, 先落盘再抓并读回, 保证手牌基线含生产阶段改动。
     """
-    if state.age is Age.IV:
-        return state, p
+    idx = state.current_player
     count = min(p.military_actions, MAX_MILITARY_DRAW)
-    if count <= 0:
-        return state, p
-    deck = list(state.military_deck)
-    discard = list(state.military_discard)
-    hand = list(p.hand_military)
-    rng = state.rng_state
-    for _ in range(count):
-        if not deck:
-            if not discard:
-                break
-            rng, deck = rng_shuffle(rng, discard)
-            discard = []
-        hand.append(deck.pop(0))
-    state = replace(state, military_deck=tuple(deck),
-                    military_discard=tuple(discard), rng_state=rng)
-    return state, replace(p, hand_military=tuple(hand))
+    state = military.draw_military(replace_player(state, idx, p), idx, count)
+    return state, state.players[idx]
 
 
 def _production(db: CardDB, p: PlayerState, values: civ.CivValues) -> PlayerState:

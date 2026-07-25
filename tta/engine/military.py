@@ -17,11 +17,19 @@ army_strength(db, p) 合成玩家军力:
 
 静态加成(领袖亚历山大每单位 +1、拿破仑每类型 +2、奇迹/政府 bonus)
 不在本模块, 由 civ.py 经 effects.static_bonuses 叠加于 army_strength 之上。
+
+draw_military(state, idx, count) 为军事牌堆抓牌的共用实现(事件效果与
+回合末抓牌同一官方口径, 规则书 p7): 从军事牌堆顶抓 count 张入 idx 手;
+牌堆空则切洗当前时代军事弃牌堆重置牌堆继续抓, 弃牌堆也空则抓不到;
+时代 IV 无军事牌堆, 不抓。
 """
+
+from dataclasses import replace
 
 from tta.engine.enums import UNIT_CATEGORIES, Age, CardCategory
 from tta.engine.model import CardDB, CardDefinition
-from tta.engine.state import PlayerState
+from tta.engine.rng import rng_shuffle
+from tta.engine.state import GameState, PlayerState, replace_player
 
 _AGE_ORDER = (Age.A, Age.I, Age.II, Age.III)
 """时代等级序(IV 为终局标记, 卡牌不出现)."""
@@ -83,3 +91,29 @@ def army_strength(db: CardDB, p: PlayerState) -> int:
     group_values.sort(reverse=True)
     bonus += sum(group_values[:air_workers])
     return base + bonus
+
+
+def draw_military(state: GameState, idx: int, count: int) -> GameState:
+    """从军事牌堆抓 count 张入 idx 手(牌堆空切洗军事弃牌堆; 时代 IV 不抓).
+
+    官方口径(规则书 p7): 抓到军事牌堆最后一张时, 切洗当前时代的军事
+    弃牌堆重置牌堆继续抓; 弃牌堆也空则抓不到。事件效果与回合末抓牌
+    共用本实现。
+    """
+    if state.age is Age.IV or count <= 0:
+        return state
+    deck = list(state.military_deck)
+    discard = list(state.military_discard)
+    hand = list(state.players[idx].hand_military)
+    rng = state.rng_state
+    for _ in range(count):
+        if not deck:
+            if not discard:
+                break
+            rng, deck = rng_shuffle(rng, discard)
+            discard = []
+        hand.append(deck.pop(0))
+    state = replace(state, military_deck=tuple(deck),
+                    military_discard=tuple(discard), rng_state=rng)
+    return replace_player(
+        state, idx, replace(state.players[idx], hand_military=tuple(hand)))

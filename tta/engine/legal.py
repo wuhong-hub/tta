@@ -55,7 +55,7 @@ from tta.engine.actions import (
     Upgrade,
 )
 from tta.engine.civ import civ_values, hand_limit_civil
-from tta.engine.economy import resource_total
+from tta.engine.economy import food_total, resource_total
 from tta.engine.enums import (
     UNIT_CATEGORIES,
     URBAN_CATEGORIES,
@@ -366,8 +366,17 @@ def _free_build_actions(p: PlayerState, card_id: str) -> list[Action]:
 
 
 def _civilization_choice_actions(db: CardDB, p: PlayerState) -> list[Action]:
-    """development_of_civilization 三选一: 仅枚举当前可行的选项."""
+    """development_of_civilization 三选一(官方): 仅枚举当前可行的选项.
+
+    官方选项 ① +1 人口付 1 食物(事件固定价, moses 折扣不适用): 需
+    yellow_bank > 0 且食物总量 >= 1; ② 建造(引擎拆为 farm_mine/urban 两个
+    option, 折扣 1); ③ 研发科技(科技费折扣 1)。全部不可行时仅剩
+    DeclineResponse。
+    """
     actions: list[Action] = []
+    if (p.yellow_bank > 0
+            and food_total(db, p) >= events.CIVILIZATION_POPULATION_FOOD_COST):
+        actions.append(ChooseEventOption(events.CIVILIZATION_OPTION_POPULATION))
     farm_mine = effects.PENDING_BUILD_CATEGORIES[effects.KIND_BUILD_FARM_MINE]
     if _build_actions(db, p, categories=farm_mine, point_cost=0, discount=1):
         actions.append(ChooseEventOption("farm_mine"))
