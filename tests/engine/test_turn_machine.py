@@ -3,9 +3,14 @@
 import pytest
 
 from tta.engine import turn
-from tta.engine.actions import IllegalActionError, PassTurn
+from tta.engine.actions import (
+    DiscardMilitary,
+    IllegalActionError,
+    PassTurn,
+)
 from tta.engine.apply import apply
-from tta.engine.enums import Age, CardCategory, DeckType
+from tta.engine.enums import Age, CardCategory, DeckType, Phase
+from tta.engine.legal import legal_actions
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
 from tta.engine.state import ROW_SLOTS, GameState, PendingEffect, PlayerState
 
@@ -446,6 +451,44 @@ def test_age_four_discards_left_cards_but_never_refills() -> None:
     new = turn.advance(new, _db())
     assert new.removed == ("xiii5", "xiii6", "xiii7", "xiii8")
     assert new.card_row == (None,) * ROW_SLOTS
+
+
+# --- 回合末弃牌时序 ----------------------------------------------------------
+
+
+def test_discard_military_settles_before_proceeding() -> None:
+    """官方顺序: 回合末弃牌决策完成后, 才推进到下一位的回合开始."""
+    db = _db()
+    # 上限 = 专制 2 红点, 手牌 3 -> 超 1 张
+    p0 = _player("P0", military_actions=0, hand_military=("m0", "m1", "m2"))
+    row = _full_row("xi")
+    state = _state(round=2, age=Age.I, players=(p0, _player("P1")),
+                   card_row=row, civil_deck=("xi13", "xi14", "xi15", "xi16"))
+    new = turn.advance(state, db)
+    # 回合末已结算(P0 行动点恢复为专制 4 白), 但推进尚未发生
+    assert new.players[0].civil_actions == 4
+    assert new.current_player == 0
+    assert new.round == 2
+    assert new.card_row == row
+    assert new.civil_deck == ("xi13", "xi14", "xi15", "xi16")
+    assert new.phase is Phase.TURN_START
+    assert len(new.pending) == 1
+    assert new.pending[0].kind == "discard_military"
+    assert new.pending[0].responder == 0
+    # 响应期仅强制弃牌, 无 PassTurn 兜底
+    assert legal_actions(db, new) == [
+        DiscardMilitary("m0"), DiscardMilitary("m1"), DiscardMilitary("m2")]
+    # 弃至合规 -> proceed 继续推进, 下一位回合开始恰执行一次
+    new = apply(new, DiscardMilitary("m0"), db)
+    assert new.pending == ()
+    assert new.current_player == 1
+    assert new.phase is Phase.POLITICS
+    assert new.removed == ("xi0", "xi1", "xi2")
+    assert new.card_row == tuple(f"xi{i}" for i in range(3, 16))
+    assert new.civil_deck == ("xi16",)
+    # 入参不被改动
+    assert state.pending == ()
+    assert state.card_row == row
 
 
 # --- PassTurn 接入 ---------------------------------------------------------

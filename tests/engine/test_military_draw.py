@@ -19,7 +19,7 @@ from tta.engine.actions import (
     action_to_dict,
 )
 from tta.engine.apply import apply
-from tta.engine.enums import Age, CardCategory, DeckType
+from tta.engine.enums import Age, CardCategory, DeckType, Phase
 from tta.engine.legal import legal_actions
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
 from tta.engine.setup import new_game
@@ -239,41 +239,100 @@ def test_age_transition_replaces_military_deck() -> None:
     assert "II" not in new.future_military_decks
     assert "mi8" in new.removed
     assert "mi9" in new.removed
+    # 军事弃牌堆按时代清空: 旧弃牌堆并入 removed, 不再参与重洗
+    assert new.military_discard == ()
+    assert "mi7" in new.removed
+
+
+def test_age_transition_discard_excluded_from_reshuffle() -> None:
+    """时代切换后: 旧时代军事弃牌堆不参与新时代牌堆的重洗."""
+    db = _db()
+    # 时代 II: 牌堆仅 1 张, 当前时代弃牌堆为空(旧时代弃牌堆已入 removed)
+    p0 = _player("P0", military_actions=3)
+    state = _state(age=Age.II,
+                   players=(p0, _player("P1")),
+                   military_deck=("mii0",), military_discard=(),
+                   removed=("mi7", "mi6"))
+    new = turn.advance(state, db)
+    # 只抓到牌堆仅有的 1 张; 旧时代弃牌(mi6/mi7)不被重洗回牌堆
+    assert new.players[0].hand_military == ("mii0",)
+    assert new.military_deck == ()
+    assert new.military_discard == ()
+    # removed 新增部分仅为回合开始弃掉的牌列最左 3 张, 旧军事弃牌不动
+    assert new.removed == ("mi7", "mi6", "xi0", "xi1", "xi2")
+    assert new.rng_state == state.rng_state  # 未发生切洗
+
+
+def test_enter_age_four_clears_military_discard() -> None:
+    """时代 III 牌堆尽 -> 时代 IV: 军事牌堆余牌与军事弃牌堆均入 removed."""
+    db = _db()
+    state = _state(
+        round=3,
+        age=Age.III,
+        card_row=("xiii0",) + (None,) * (ROW_SLOTS - 1),
+        civil_deck=("xiii1",),
+        future_decks={},
+        military_deck=("miii8",),
+        military_discard=("miii7",),
+    )
+    new = turn.advance(state, db)
+    assert new.age is Age.IV
+    assert new.military_deck == ()
+    assert new.military_discard == ()
+    assert "miii8" in new.removed
+    assert "miii7" in new.removed
 
 
 # --- 回合末弃多余军事牌(discard_military pending) ---------------------------
 
 
 def test_discard_excess_pending_flow() -> None:
-    """手牌 4 > 上限 2 -> pending count=2, 逐张弃至合规后 pop."""
+    """手牌 4 > 上限 2 -> pending count=2; 弃牌结算完毕才推进到下一位."""
     db = _db()
     p0 = _player("P0", military_actions=0,
                  hand_military=("mi0", "mi1", "mi2", "mi3"))
     state = _state(players=(p0, _player("P1")))
     new = turn.advance(state, db)
-    # pending 由刚结束回合的 P0 响应(即使当前玩家已推进到 P1)
-    assert new.current_player == 1
+    # 官方顺序: 回合结束阶段(含弃牌决策)全部完成后, 才轮到下一位的回合
+    # 开始 -> 推进尚未发生: current_player/round/age/牌列/牌堆全部保持
+    assert new.current_player == 0
+    assert new.round == state.round
+    assert new.age is state.age
+    assert new.card_row == state.card_row
+    assert new.civil_deck == state.civil_deck
+    assert new.removed == ()
+    assert new.phase is Phase.TURN_START
+    # pending 由刚结束回合的 P0 响应
     assert len(new.pending) == 1
     pending = new.pending[0]
     assert pending.kind == "discard_military"
     assert pending.responder == 0
     assert pending.context == {"count": 2}
-    # 法律兜底: pending 恒有 DiscardMilitary 可用; 响应期无 PassTurn
+    # 法律: 仅 DiscardMilitary(强制弃牌, 响应期无 PassTurn 兜底)
     legal = legal_actions(db, new)
     assert legal
     assert all(isinstance(a, DiscardMilitary) for a in legal)
+    assert PassTurn() not in legal
     assert {a.card_id for a in legal} == {"mi0", "mi1", "mi2", "mi3"}
-    # 弃 1 张: 入军事弃牌堆, count 递减, pending 保留
+    # 弃 1 张: 入军事弃牌堆, count 递减, 仍不推进
     new = apply(new, DiscardMilitary("mi1"), db)
     assert new.players[0].hand_military == ("mi0", "mi2", "mi3")
     assert new.military_discard == ("mi1",)
+    assert new.current_player == 0
+    assert new.card_row == state.card_row
     assert len(new.pending) == 1
     assert new.pending[0].context["count"] == 1
-    # 再弃 1 张: 合规, pending pop, 控制权恢复当前玩家(政治阶段)
+    # 再弃 1 张: 合规, pending pop -> 推进, 下一位回合开始此刻才发生
     new = apply(new, DiscardMilitary("mi0"), db)
     assert new.pending == ()
     assert new.players[0].hand_military == ("mi2", "mi3")
     assert new.military_discard == ("mi1", "mi0")
+    assert new.current_player == 1
+    assert new.phase is Phase.POLITICS
+    # 下一位回合开始恰执行一次: 弃最左 3 张入 removed, 左移后补 3 张
+    assert new.removed == ("xi0", "xi1", "xi2")
+    assert new.card_row == tuple(f"xi{i}" for i in range(3, 16))
+    assert new.civil_deck == ("xi16", "xi17", "xi18", "xi19")
     assert legal_actions(db, new) == [SkipPolitics()]
 
 

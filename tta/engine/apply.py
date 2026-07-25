@@ -74,7 +74,7 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     if isinstance(action, PlayActionCard):
         return _play_action_card(db, state, action)
     if isinstance(action, DiscardMilitary):
-        return _discard_military(state, action)
+        return _discard_military(db, state, action)
     if isinstance(action, IncreasePopulation):
         return _increase_population(db, state)
     msg = f"未知动作类型: {action!r}"  # pragma: no cover
@@ -367,10 +367,14 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
     return _update(state, idx, p)
 
 
-def _discard_military(state: GameState, action: DiscardMilitary) -> GameState:
+def _discard_military(
+    db: CardDB, state: GameState, action: DiscardMilitary,
+) -> GameState:
     """弃 1 张军事手牌入军事弃牌堆; pending context count 递减, 归零时 pop.
 
-    行动者 = pending[0].responder(回合末超上限的玩家, 见 turn._end_of_turn)。
+    行动者 = pending[0].responder(回合末超上限的玩家, 见 turn.end_of_turn)。
+    官方顺序: 回合结束阶段(含弃牌决策)全部完成后才轮到下一位的回合开始,
+    故 count 归零 pop 后调用 turn.proceed 继续推进(不重复回合末内容)。
     """
     idx = acting_index(state)
     p = state.players[idx]
@@ -381,15 +385,17 @@ def _discard_military(state: GameState, action: DiscardMilitary) -> GameState:
         state, military_discard=state.military_discard + (action.card_id,))
     pending = state.pending[0]
     count = int(pending.context.get("count", 1)) - 1
-    if count <= 0:
-        state = replace(state, pending=state.pending[1:])
-    else:
+    if count > 0:
         context = dict(pending.context)
         context["count"] = count
         state = replace(
             state, pending=(replace(pending, context=context),)
             + state.pending[1:])
-    return _update(state, idx, p)
+        return _update(state, idx, p)
+    state = replace(state, pending=state.pending[1:])
+    state = _update(state, idx, p)
+    # 弃牌结算完毕 -> 继续回合推进(下一位玩家的回合开始此刻才发生)
+    return turn.proceed(state, db)
 
 
 def _increase_population(db: CardDB, state: GameState) -> GameState:
