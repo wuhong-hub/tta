@@ -24,6 +24,29 @@ def test_selfplay_multiple_games(tmp_path) -> None:
     assert len(list(tmp_path.glob("*.jsonl"))) == 2
 
 
+def test_selfplay_four_players(tmp_path) -> None:
+    """4 人局冒烟(T13): 产出 1 局 JSONL 且 meta/result 齐全."""
+    rc = main(["selfplay", "--players", "4", "--seed", "7",
+               "--games", "1", "--out", str(tmp_path)])
+    assert rc == 0
+    files = list(tmp_path.glob("*.jsonl"))
+    assert len(files) == 1
+    events = [json.loads(x) for x in files[0].read_text().splitlines()]
+    assert events[0]["type"] == "meta"
+    assert events[-1]["type"] == "result"
+
+
+def test_selfplay_deterministic_same_seed(tmp_path) -> None:
+    """同种子两局 JSONL 逐字节一致(P2 完成判定: 同种子确定性)."""
+    for sub in ("a", "b"):
+        rc = main(["selfplay", "--players", "3", "--seed", "11",
+                   "--games", "1", "--out", str(tmp_path / sub)])
+        assert rc == 0
+    fa = next((tmp_path / "a").glob("*.jsonl")).read_bytes()
+    fb = next((tmp_path / "b").glob("*.jsonl")).read_bytes()
+    assert fa == fb
+
+
 def test_replay_summary(tmp_path, capsys) -> None:
     main(["selfplay", "--players", "2", "--seed", "42",
           "--games", "1", "--out", str(tmp_path)])

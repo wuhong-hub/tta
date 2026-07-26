@@ -162,7 +162,7 @@ ROCKETS = _tech(
 AIR_FORCES = _tech(
     "air_forces", "空军", "Air Forces", CardCategory.AIR,
     12, 7, (2, 2, 3),
-    "每个空军单位提供 5 军力(空军编队限制等特殊规则 P2-DEFERRED)。",
+    "每个空军单位提供 5 军力。",
     strength=5,
 )
 

@@ -84,7 +84,9 @@ SeedEvent 结算(规则书 p4/p7):
   战争牌入 removed 且宣战者 +7 文化; 黄/蓝标记与工人随文明退出冻结保留
   (守恒口径, 不再参与游戏)。只剩 1 人 -> 游戏立即结束, 该玩家直接判胜
   (不比文化, final_scores 其严格最高); 仍有 >=2 人继续, 轮换跳过其座位
-  (turn.proceed), 事件比较与目标枚举排除已退出者(state.active_indices)。
+  (turn.proceed), 事件比较与目标枚举排除已退出者(state.active_indices);
+  未开启的时代 I/II/III 内政堆按新人数重组重洗(规则书 p4, T13,
+  _readjust_future_decks)。
 - Julius Caesar: 领袖在场且 caesar_used=False 时, 政治动作结算后
   (seed_event/侵略判定/宣战/条约接受/取缔)phase 回 POLITICS 而非 ACTION
   并置 caesar_used=True(一次性); 第二次政治动作后 -> ACTION。
@@ -1464,4 +1466,28 @@ def resign(db: CardDB, state: GameState) -> GameState:
         scores = [q.culture for q in state.players]
         scores[winner] = max(scores) + 1
         return replace(state, terminal=True, final_scores=tuple(scores))
+    # 规则书 p4 体面退出: "在进入时代II或III之前, 玩家按照初始设置根据
+    # 玩家当前人数重新调整相应的牌堆" -> 未开启的未来内政堆按新人数重组
+    state = _readjust_future_decks(db, state, len(active))
     return replace(state, phase=Phase.ACTION)
+
+
+def _readjust_future_decks(
+    db: CardDB, state: GameState, num_players: int,
+) -> GameState:
+    """体面退出后按新人数重组未开启的未来内政牌堆(规则书 p4, T13).
+
+    future_decks 中尚未开启的时代 I/II/III 内政堆按新人数 deck_for 重组,
+    消费 rng_state 重洗(确定性: 按时代键排序依次重洗); 已开启的当前内政
+    牌堆不变(规则: "不再更改当前的游戏牌堆")。军事未来牌堆规则书未明示,
+    SIMPLIFICATION: 不重组(开局按原人数组牌, 退出后沿用)。
+    """
+    if not state.future_decks:
+        return state
+    rng = state.rng_state
+    future: dict[str, tuple[str, ...]] = {}
+    for age_value in sorted(state.future_decks):
+        rng, shuffled = rng_shuffle(
+            rng, db.deck_for(Age(age_value), num_players))
+        future[age_value] = tuple(shuffled)
+    return replace(state, future_decks=future, rng_state=rng)

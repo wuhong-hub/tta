@@ -3,6 +3,14 @@
 指纹 = run_game 的 GameResult(scores/winners/rounds/steps) + 终局
 state_hash。任何影响对局轨迹的引擎/卡牌改动都会破坏本测试, 届时须
 人工确认变更符合官方规则后再回填指纹。
+
+T13 回填说明(2026-07-26): 阵型替换旧卡由军事弃牌堆改入 removed(规则书
+p3, 永不回流)改变终局状态分布 -> 仅终局 hash 变化, 轨迹四元组
+(scores/winners/rounds/steps)不变。终局分数实际值为 (0, 0): 随机玩家
+全程无文化增速, 4 张时代 III Impact 事件(impact_of_colonies/
+architecture/agriculture/industry, 见终局 past_events)于 endgame_scoring
+生效但各计 0 分——Impact 计分通路已被触发, 非零产出口径由
+tests/engine/test_events_iii.py 脚本化场景覆盖(final_scores (13, 7) 等)。
 """
 
 from tta.agents.random_agent import RandomPlayer
@@ -18,7 +26,7 @@ GOLDEN_WINNERS = (0, 1)
 GOLDEN_ROUNDS = 21
 GOLDEN_STEPS = 211
 GOLDEN_FINAL_STATE_HASH = (
-    "d7e09ec2031e915ae003e2df845dc30cea16b6a820393fce34f901cb91414350"
+    "4ece2aad2795bae7b5626471e7d3154bb854e2715cf464b073c4e7def108bbc4"
 )
 
 

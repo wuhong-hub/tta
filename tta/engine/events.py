@@ -48,7 +48,7 @@ from dataclasses import replace
 
 from tta.engine import economy, effects, military
 from tta.engine.civ import civ_values, discontent, hand_limit_civil
-from tta.engine.constants import ROW_COSTS
+from tta.engine.constants import FOOD_SHORTAGE_CULTURE_PENALTY, ROW_COSTS
 from tta.engine.enums import (
     UNIT_CATEGORIES,
     URBAN_CATEGORIES,
@@ -766,10 +766,6 @@ CRIME_WAVE_CULTURE = 3
 CRIME_WAVE_SCIENCE = 1
 """crime_wave 两个最弱文明各自失去的文化/科技(下限 0)."""
 
-FOOD_SHORTAGE_CULTURE_PENALTY = 4
-"""食物消耗每缺 1 点损失的文化(与 turn 生产阶段同值; events 不得 import
-turn[循环], 此处重声明)."""
-
 NATIONAL_PRIDE_CULTURE = 5
 """national_pride 文化分最多的文明获得的文化."""
 
@@ -1450,7 +1446,7 @@ def _impact_of_strength(state: GameState, db: CardDB) -> GameState:
 
 def _impact_of_technology(state: GameState, db: CardDB) -> GameState:
     """每个文明每项时代 III 科技 +4 文化(政体算科技, 同 first_space_flight
-    口径; 按已研发卡计, 同名卡只计一次)."""
+    口径; 按已研发卡逐张计)."""
 
     def score(db: CardDB, state: GameState, i: int) -> int:
         p = state.players[i]

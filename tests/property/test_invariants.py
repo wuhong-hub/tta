@@ -1,6 +1,7 @@
 """官方规则属性测试: 随机合法动作整局的不变量校验(P1 Task 14 重写).
 
-用 stdlib random 驱动随机合法动作, 跑 10 个种子的 2 人整局, 每步断言:
+用 stdlib random 驱动随机合法动作, 跑 10 个种子的 2 人整局与 3 个种子的
+3 人整局(覆盖条约双录/多目标战争), 每步断言:
 
 1. 黄点守恒(每人): yellow_bank + worker_pool + 建筑工人数
    = 25 − 2 × (已结束的时代 I/II/III 数) + 转移净转入。
@@ -32,10 +33,27 @@
    ≡ 牌库全集(内政 + 军事, multiset; buildings/card_tokens 的键均 ⊆
    developed, 不重复计数; 领袖弃置入弃牌堆、政府更替入弃牌堆、过期入
    removed; 时代 A 事件堆余量与旧军事牌堆余牌入 removed; 打出阵型手牌
-   -> tactics 字段, 替换时实体卡入军事弃牌堆, 复制引用仅引用不计;
+   -> tactics 字段, 替换时实体卡入 removed(规则书 p3, T13; 复制引用仅
+   引用不计);
    宣告战争手牌 -> declared_wars(在途), 结算后入军事弃牌堆)。
-5. 序列化往返: 每 10 步 from_dict(to_dict(state)) == state。
+5. 序列化往返: 每 10 步 from_dict(to_dict(state)) == state(含 P2 新字段
+   非空值: pacts/declared_wars/colonies/wonders_facedown 等, 3 人局
+   覆盖条约双录)。
 6. state_hash 链: 同 seed 两次逐步走, 每步 hash 相等(见独立测试)。
+7. 军事手牌上限执行(T13): 上限(= civ 军事行动点 + military_hand_extra)
+   仅在回合末弃牌点强制执行, 且引擎口径弃牌检查先于抓牌——discard
+   pending 压入后整个回合末流程(含抓 ≤3 张)才完成, 响应才发生, 故
+   响应期手牌 = 压入时手牌 + 抓取数, 收敛后手牌 = 上限 + 抓取数; 殖民
+   竞拍与 politics_of_strength 事件抽牌亦明示忽略上限。逐步可断言的
+   不变量: discard_military pending 存续期间 1 ≤ context.count ≤
+   响应者手牌数 − 上限(弃牌序列向上限收敛且绝不弃过限)。
+8. 事件牌堆守恒(T13): 军事牌库中 EVENT/TERRITORY 类别子集 ≡
+   current_events + future_events + past_events + removed 中事件类
+   + 各玩家军事手牌中事件类 + 各玩家殖民地(竞拍赢得的 TERRITORY)
+   + 在途(殖民竞拍 pending 的 territory)。
+9. 战争/条约状态合法性(T13): declared_wars 的卡均为 WAR 类别、目标为
+   未退出的其他玩家座位; pacts 双方同录(每条 (卡, 侧) 恰有另一玩家
+   同录同卡异侧, 侧 ∈ {A, B}); 翻面奇迹 ⊆ 已完成奇迹。
 """
 
 import random
@@ -44,10 +62,11 @@ from collections import Counter
 import pytest
 
 from tta.cards import build_card_db
-from tta.engine import politics
+from tta.engine import effects, politics
 from tta.engine.actions import DevelopTech, Resign, SeedEvent
 from tta.engine.apply import apply
-from tta.engine.enums import Age, DeckType
+from tta.engine.civ import civ_values
+from tta.engine.enums import Age, CardCategory, DeckType
 from tta.engine.legal import legal_actions
 from tta.engine.setup import new_game
 from tta.engine.state import (
@@ -61,7 +80,10 @@ from tta.engine.state import (
 from tta.engine.turn import AGE_END_YELLOW_LOSS
 
 SEEDS = range(10)
-"""整局属性测试的种子集."""
+"""整局属性测试的种子集(2 人局)."""
+
+SEEDS_3P = range(3)
+"""3 人局种子集(覆盖条约双录/多目标战争/殖民多方竞拍)."""
 
 SERIALIZE_EVERY = 10
 """序列化往返断言的步数间隔."""
@@ -195,15 +217,110 @@ def _assert_player_invariants(
     assert 0 <= p.yellow_bank <= 18
     assert 0 <= p.blue_bank <= _blue_ceiling(blue_gains)
     assert all(count >= 0 for count in p.card_tokens.values())
+    # 翻面奇迹(ravages_of_time) ⊆ 已完成奇迹(翻面不位移, 仅效果失效)
+    assert set(p.wonders_facedown) <= set(p.wonders)
 
 
-def _run_game_with_invariants(db, seed: int) -> GameState:
+_EVENT_LIKE = (CardCategory.EVENT, CardCategory.TERRITORY)
+"""事件堆守恒口径: 事件牌与其揭示产物的类别子集."""
+
+
+def _event_universe(db, num_players: int) -> Counter:
+    """军事牌库中 EVENT/TERRITORY 类别子集 multiset."""
+    universe: Counter = Counter()
+    for age in (Age.A, Age.I, Age.II, Age.III):
+        universe.update(
+            card_id
+            for card_id in db.deck_for(age, num_players, DeckType.MILITARY)
+            if db.get(card_id).category in _EVENT_LIKE
+        )
+    return universe
+
+
+def _assert_event_conservation(db, state: GameState, universe: Counter) -> None:
+    """事件堆守恒: current+future+past+removed(事件类)+手牌中事件类+殖民地+在途.
+
+    口径说明: 事件牌尚未抓出时在军事牌堆/未来军事堆/军事弃牌堆中(弃置未
+    筹划的事件可经切洗回流); SeedEvent 手牌 -> future_events; 揭示结算
+    -> past_events; TERRITORY 竞拍在途于 pending context, 赢家入
+    colonies, 流拍入 past_events; 时代 A 事件堆余量与时代切换时的旧军事
+    堆均入 removed。翻面奇迹与殖民地已在全局守恒(_accounted)计入玩家
+    区域, 此处殖民地为 TERRITORY 类别的专项去向。
+    """
+    accounted: Counter = Counter()
+    accounted.update(state.current_events)
+    accounted.update(state.future_events)
+    accounted.update(state.past_events)
+    for pile in (state.military_deck, state.military_discard, state.removed,
+                 *state.future_military_decks.values()):
+        accounted.update(
+            card_id for card_id in pile
+            if db.get(card_id).category in _EVENT_LIKE
+        )
+    for p in state.players:
+        accounted.update(
+            card_id for card_id in p.hand_military
+            if db.get(card_id).category in _EVENT_LIKE
+        )
+        accounted.update(p.colonies)
+    for e in state.pending:
+        if e.kind in (politics.KIND_COLONIZE_BID,
+                      politics.KIND_COLONIZE_SACRIFICE):
+            accounted.update([str(e.context["territory"])])
+    assert accounted == universe, (
+        f"事件堆不守恒: {accounted - universe} / {universe - accounted}")
+
+
+def _assert_war_pact_legality(db, state: GameState) -> None:
+    """战争/条约状态合法性(见模块 docstring 第 9 条)."""
+    n = len(state.players)
+    for i, p in enumerate(state.players):
+        for card_id, target in p.declared_wars:
+            assert db.get(card_id).category is CardCategory.WAR, card_id
+            assert 0 <= target < n and target != i
+            assert not state.players[target].resigned
+        for card_id, side in p.pacts:
+            assert db.get(card_id).category is CardCategory.PACT, card_id
+            assert side in ("A", "B")
+            # 双方同录: 恰有另一未退出玩家同录同卡异侧
+            partners = [
+                j for j, q in enumerate(state.players)
+                if j != i and not q.resigned
+                and (card_id, "B" if side == "A" else "A") in q.pacts
+            ]
+            assert len(partners) == 1, (
+                f"{p.name} 条约 {card_id}({side}) 无唯一对方同录: {partners}")
+
+
+def _assert_military_discard_pending_exact(db, state: GameState) -> None:
+    """军事手牌上限执行(模块 docstring 第 7 条).
+
+    上限 = civ 军事行动点 + military_hand_extra, 仅回合末弃牌点强制执行。
+    引擎口径弃牌检查先于抓牌: pending 压入时 count = 当时手牌 − 上限,
+    随后抓牌使手牌增大, 故存续期间不变量为 1 ≤ count ≤ 手牌数 − 上限
+    (每次 DiscardMilitary 手牌与 count 同步 −1, 差值 = 抓取数不变)。
+    """
+    for e in state.pending:
+        if e.kind != effects.KIND_DISCARD_MILITARY:
+            continue
+        idx = int(e.responder) if e.responder is not None else state.current_player
+        p = state.players[idx]
+        values = civ_values(db, p, state.players, idx)
+        limit = values.military_actions + values.military_hand_extra
+        count = int(e.context["count"])
+        assert 1 <= count <= len(p.hand_military) - limit, (
+            f"{p.name} 弃牌序列越界: count={count}, 手牌 "
+            f"{len(p.hand_military)}, 上限 {limit}")
+
+
+def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
     """跑一整局, 每步断言全部不变量, 返回终局状态."""
-    state = new_game(db, 2, seed)
+    state = new_game(db, num_players, seed)
     rng = random.Random(seed)
-    universe = _universe(db, 2)
-    blue_gains = [0, 0]
-    yellow_adj = [0, 0]
+    universe = _universe(db, num_players)
+    event_universe = _event_universe(db, num_players)
+    blue_gains = [0] * num_players
+    yellow_adj = [0] * num_players
     steps = 0
     while not state.terminal:
         legal = legal_actions(db, state)
@@ -257,6 +374,9 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
             f"seed {seed} step {steps} 卡牌守恒破坏: "
             f"{_accounted(state) - universe} / {universe - _accounted(state)}"
         )
+        _assert_event_conservation(db, state, event_universe)
+        _assert_war_pact_legality(db, state)
+        _assert_military_discard_pending_exact(db, state)
         if steps % SERIALIZE_EVERY == 0:
             assert from_dict(to_dict(state)) == state, (
                 f"seed {seed} step {steps} 序列化往返失败"
@@ -279,6 +399,12 @@ def _run_game_with_invariants(db, seed: int) -> GameState:
 def test_full_game_invariants(db, seed: int) -> None:
     """10 种子 2 人整局: 每步黄点/蓝点/非负/卡牌守恒 + 定期序列化往返."""
     _run_game_with_invariants(db, seed)
+
+
+@pytest.mark.parametrize("seed", SEEDS_3P)
+def test_full_game_invariants_3p(db, seed: int) -> None:
+    """3 种子 3 人整局(T13): 覆盖条约双录/多目标战争/多方殖民竞拍."""
+    _run_game_with_invariants(db, seed, num_players=3)
 
 
 def test_state_hash_chain_deterministic(db) -> None:

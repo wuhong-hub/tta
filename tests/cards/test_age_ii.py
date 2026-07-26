@@ -459,7 +459,7 @@ def test_newton_develop_tech_gets_civil_action_back(db: CardDB) -> None:
 
 
 def test_shakespeare_static_happiness(db: CardDB) -> None:
-    """william_shakespeare: +1 笑脸(静态, T12 审查补登); 配对/折扣仍 P2."""
+    """william_shakespeare: +1 笑脸(静态, T12 审查补登); 折扣仍 P2."""
     p = _player(leader="william_shakespeare")
     assert effects.static_bonuses(db, p) == {"happiness": 1}
     civ = civ_values(db, p)
@@ -467,14 +467,60 @@ def test_shakespeare_static_happiness(db: CardDB) -> None:
     assert "P2-DEFERRED" in db.get("william_shakespeare").text
 
 
-def test_cook_bach_deferred(db: CardDB) -> None:
-    """cook/bach: 互动能力 P2-DEFERRED, 无钩子."""
-    for card_id in ("james_cook", "j_s_bach"):
-        card = db.get(card_id)
-        assert card.handler == "", card_id
-        assert "P2-DEFERRED" in card.text, card_id
-        p = _player(leader=card_id)
-        assert effects.static_bonuses(db, p) == {}, card_id
+def test_shakespeare_pair_culture(db: CardDB) -> None:
+    """william_shakespeare: 每对图书馆-剧院 +2 文化(T13, PDF 第 2 页).
+
+    配对口径(SIMPLIFICATION): 图书馆按已研发卡计(同 leonardo 口径), 剧院
+    按有工人的卡计(同 chaplin 口径); 对数 = min(图书馆数, 剧院数)。
+    """
+    # 2 图书馆 + 1 剧院 -> 1 对 -> +2 文化
+    p = _player(
+        leader="william_shakespeare",
+        developed=("printing_press", "journalism"),
+        buildings={"theater": {"drama": 1}})
+    assert effects.static_bonuses(db, p) == {"happiness": 1, "culture": 2}
+    # 1 图书馆 + 2 剧院(工人分布两张卡) -> 1 对 -> +2 文化
+    p2 = _player(
+        leader="william_shakespeare",
+        developed=("printing_press",),
+        buildings={"theater": {"drama": 1, "opera": 1}})
+    assert effects.static_bonuses(db, p2) == {"happiness": 1, "culture": 2}
+    # 2 图书馆 + 2 剧院 -> 2 对 -> +4 文化
+    p3 = _player(
+        leader="william_shakespeare",
+        developed=("printing_press", "journalism"),
+        buildings={"theater": {"drama": 1, "opera": 1}})
+    assert effects.static_bonuses(db, p3) == {"happiness": 1, "culture": 4}
+    # 剧院无工人不配对
+    p4 = _player(
+        leader="william_shakespeare",
+        developed=("printing_press",),
+        buildings={"theater": {}})
+    assert effects.static_bonuses(db, p4) == {"happiness": 1}
+
+
+def test_bach_static_culture_per_theater(db: CardDB) -> None:
+    """j_s_bach: 每个剧院 +1 文化(T13, PDF 第 2 页); 折扣/升级仍 P2.
+
+    剧院按有工人的卡计(同 chaplin 口径, 每卡 1 次与工人数无关)。
+    """
+    p = _player(
+        leader="j_s_bach",
+        buildings={"theater": {"drama": 2, "opera": 1}})
+    assert effects.static_bonuses(db, p) == {"culture": 2}
+    civ = civ_values(db, p)
+    # 剧院自身文化(drama 2×2 + opera 3×1) + bach 2
+    assert civ.culture_rate == (2 * 2 + 3 * 1) + 2
+    assert "P2-DEFERRED" in db.get("j_s_bach").text
+
+
+def test_cook_deferred(db: CardDB) -> None:
+    """cook: 互动能力 P2-DEFERRED, 无钩子."""
+    card = db.get("james_cook")
+    assert card.handler == ""
+    assert "P2-DEFERRED" in card.text
+    p = _player(leader="james_cook")
+    assert effects.static_bonuses(db, p) == {}
 
 
 def test_deferred_wonders_no_handler(db: CardDB) -> None:

@@ -53,6 +53,7 @@ advance(state, db) 流程:
 from dataclasses import replace
 
 from tta.engine import civ, economy, effects, events, military, politics
+from tta.engine.constants import FOOD_SHORTAGE_CULTURE_PENALTY
 from tta.engine.enums import Age, Phase
 from tta.engine.model import CardDB
 from tta.engine.state import (
@@ -66,9 +67,6 @@ from tta.engine.tracks import consumption_value, corruption_value
 
 DISCARD_BY_PLAYERS = {2: 3, 3: 2, 4: 1}
 """回合开始弃掉的卡牌列最左位置数(按玩家人数)."""
-
-FOOD_SHORTAGE_CULTURE_PENALTY = 4
-"""食物消耗每缺 1 点损失的文化."""
 
 AGE_END_YELLOW_LOSS = 2
 """时代结束时每位玩家损失的黄点."""

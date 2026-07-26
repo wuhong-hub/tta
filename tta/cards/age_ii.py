@@ -239,8 +239,8 @@ WONDERS: tuple[CardDefinition, ...] = (
 WILLIAM_SHAKESPEARE = _leader(
     "william_shakespeare", "威廉·莎士比亚", "William Shakespeare",
     "+1 笑脸; 每有一对图书馆与剧院, +2 文化; 若你有图书馆, 剧院少花 "
-    "1 内政行动与 1 资源, 反之亦然(配对文化口径与折扣均需进一步确认, "
-    "P2-DEFERRED)。",
+    "1 内政行动与 1 资源, 反之亦然(配对文化已实现: 图书馆按已研发、剧院"
+    "按有工人卡; 折扣 P2-DEFERRED)。",
     handler="william_shakespeare",
 )
 
@@ -269,6 +269,7 @@ J_S_BACH = _leader(
     "你的每个剧院 +1 文化; 剧院少花 2 内政行动; 每回合一次, 可用 1 内政"
     "行动把任一城市建筑升级为同级或高一级的剧院(剧院折扣与升级能力 "
     "P2-DEFERRED)。",
+    handler="j_s_bach",
 )
 
 ISAAC_NEWTON = _leader(

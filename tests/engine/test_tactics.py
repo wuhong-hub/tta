@@ -340,8 +340,13 @@ def test_play_tactics_apply() -> None:
     assert state.military_discard == ()
 
 
-def test_play_tactics_replaces_old_to_military_discard() -> None:
-    """已有旧阵型时打出新阵型: 旧阵型入军事弃牌堆."""
+def test_play_tactics_replaces_old_to_removed() -> None:
+    """已有旧阵型(已公开)时打出新阵型: 旧阵型入 removed, 不入军事弃牌堆.
+
+    官方规则(规则书 p3): 已公开的阵型被替换后留公共阵型区, 重复卡从游戏
+    中移除, 永不回流军事牌堆; SIMPLIFICATION: 不单独建模公共阵型区, 被
+    替换的实体阵型卡均入 removed(T13, T4 审查交办)。
+    """
     db = _db()
     state = _state(players=(
         _player("P0", military_actions=3, tactics="phalanx",
@@ -351,7 +356,20 @@ def test_play_tactics_replaces_old_to_military_discard() -> None:
     p = state.players[0]
     assert p.tactics == "fighting_band"
     assert p.tactics_public is False
-    assert state.military_discard == ("phalanx",)
+    assert state.military_discard == ()
+    assert state.removed == ("phalanx",)
+
+
+def test_replace_unpublic_tactics_also_removed() -> None:
+    """未公开的实体旧阵型被替换同样入 removed(简化口径, 不回流军事牌堆)."""
+    db = _db()
+    state = _state(players=(
+        _player("P0", military_actions=3, tactics="phalanx",
+                tactics_public=False, hand_military=("fighting_band",)),
+        _player("P1")))
+    state = apply(state, PlayTactics("fighting_band"), db)
+    assert state.military_discard == ()
+    assert state.removed == ("phalanx",)
 
 
 def test_copy_tactics_apply() -> None:
@@ -386,7 +404,7 @@ def test_replace_copied_tactics_no_phantom_card() -> None:
 
 
 def test_replace_physical_tactics_when_copying() -> None:
-    """复制时替换实体旧阵型: 旧阵型(实体卡)入军事弃牌堆."""
+    """复制时替换实体旧阵型: 旧阵型(实体卡)入 removed, 不入军事弃牌堆."""
     db = _db()
     state = _state(players=(
         _player("P0", military_actions=3, tactics="fighting_band",
@@ -396,7 +414,8 @@ def test_replace_physical_tactics_when_copying() -> None:
     p = state.players[0]
     assert p.tactics == "phalanx"
     assert p.tactics_copied is True
-    assert state.military_discard == ("fighting_band",)
+    assert state.military_discard == ()
+    assert state.removed == ("fighting_band",)
 
 
 def test_tactics_actions_unavailable_after_use() -> None:

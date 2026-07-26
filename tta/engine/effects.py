@@ -54,9 +54,11 @@ Age A 领袖钩子(Task 9):
 - isaac_newton: STATIC_BONUS(最佳实验室/图书馆每级 +1 科技, 同
   leonardo 口径); on_develop_tech_gains 在 apply DevelopTech 结算时
   拿回 1 白点;
-- william_shakespeare: STATIC_BONUS(+1 笑脸, T12 审查补登);
-  图书馆剧院配对文化与折扣、james_cook 殖民与弃军事牌、j_s_bach
-  剧院折扣与升级: 互动能力 P2-DEFERRED, 仅卡文本;
+- william_shakespeare: STATIC_BONUS(+1 笑脸 + 每对图书馆-剧院 +2 文化,
+  T13; 配对口径: 图书馆按已研发、剧院按有工人卡); 图书馆/剧院折扣
+  P2-DEFERRED; james_cook 殖民与弃军事牌 P2-DEFERRED, 仅卡文本;
+- j_s_bach: STATIC_BONUS(每个有工人剧院 +1 文化, T13); 剧院折扣与升级
+  能力 P2-DEFERRED, 仅卡文本;
 - 特殊科技: strategy / justice_system / navigation 静态加成;
   justice_system 研发时 +3 蓝点(on_develop_tech_gains 按卡 id);
   architecture 建造折扣与三阶段 P2-DEFERRED;
@@ -163,11 +165,11 @@ LEADER_COLUMBUS = "christopher_columbus"       # P2-DEFERRED, 无钩子
 LEADER_BARBAROSSA = "frederick_barbarossa"     # P2-DEFERRED, 无钩子
 
 # 时代 II 领袖卡 id
-LEADER_SHAKESPEARE = "william_shakespeare"         # 静态 +1 笑脸
+LEADER_SHAKESPEARE = "william_shakespeare"         # 静态 +1 笑脸 + 配对文化(T13)
 LEADER_COOK = "james_cook"                         # P2-DEFERRED, 无钩子
 LEADER_NAPOLEON = "napoleon_bonaparte"
 LEADER_ROBESPIERRE = "maximilien_robespierre"
-LEADER_BACH = "j_s_bach"                           # P2-DEFERRED, 无钩子
+LEADER_BACH = "j_s_bach"                           # 静态每剧院 +1 文化(T13)
 LEADER_NEWTON = "isaac_newton"
 
 # 时代 III 领袖卡 id
@@ -540,9 +542,45 @@ def _navigation_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
     return {"colonization": 2, "strength": 3}
 
 
+SHAKESPEARE_PAIR_CULTURE = 2
+"""shakespeare 每对图书馆-剧院的文化(PDF 第 2 页: 2/lib-theatre pair)."""
+
+
+def _theater_count(p: PlayerState) -> int:
+    """在场剧院数 = 有工人的剧院卡数(每卡 1 次, 与工人数无关; 同 chaplin 口径)."""
+    return sum(
+        1
+        for workers in p.buildings.get(CardCategory.THEATER.value, {}).values()
+        if workers > 0
+    )
+
+
 def _shakespeare_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
-    """shakespeare: +1 笑脸(图书馆剧院配对文化与折扣 P2-DEFERRED)."""
-    return {"happiness": 1}
+    """shakespeare: +1 笑脸; 每对图书馆-剧院 +2 文化(PDF 第 2 页).
+
+    配对口径(SIMPLIFICATION): 图书馆按已研发卡计(同 leonardo 口径), 剧院
+    按有工人的卡计(同 chaplin 口径); 对数 = min(图书馆数, 剧院数)。
+    图书馆/剧院折扣(各 -1 白点 -1 资源)P2-DEFERRED。
+    """
+    libraries = sum(
+        1
+        for card_id in p.developed
+        if db.get(card_id).category is CardCategory.LIBRARY
+    )
+    pairs = min(libraries, _theater_count(p))
+    result: dict[str, int] = {"happiness": 1}
+    if pairs:
+        result["culture"] = SHAKESPEARE_PAIR_CULTURE * pairs
+    return result
+
+
+def _bach_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
+    """j_s_bach: 每个剧院 +1 文化(PDF 第 2 页; 有工人的卡, 同 chaplin 口径).
+
+    剧院折扣(-2 白点)与每回合升级任一城市建筑为剧院的能力 P2-DEFERRED。
+    """
+    theaters = _theater_count(p)
+    return {"culture": theaters} if theaters else {}
 
 
 STATIC_BONUS_HANDLERS.update({
@@ -550,6 +588,7 @@ STATIC_BONUS_HANDLERS.update({
     LEADER_ROBESPIERRE: _robespierre_bonus,
     LEADER_NEWTON: _newton_bonus,
     LEADER_SHAKESPEARE: _shakespeare_bonus,
+    LEADER_BACH: _bach_bonus,
     "strategy": _strategy_bonus,
     "justice_system": _justice_system_bonus,
     "navigation": _navigation_bonus,

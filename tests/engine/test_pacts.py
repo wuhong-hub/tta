@@ -20,6 +20,7 @@ Caesar 一次性双政治。
 - 条约静态效果按卡牌数值表 p3 A/B 列(见 civ.PACT_STATIC_BONUSES)。
 """
 
+from collections import Counter
 from dataclasses import replace
 
 from tta.cards import build_card_db
@@ -515,6 +516,76 @@ def test_resigned_player_only_pass_turn() -> None:
     db = build_card_db()
     state = apply(_state(), Resign(), db)
     assert legal_actions(db, state) == [PassTurn()]
+
+
+# --- 体面退出后未来内政牌堆按新人数重组(规则书 p4, T13) ------------------------------
+
+
+def test_resign_rebuilds_future_civil_decks() -> None:
+    """3 人局时代 A 退出 1 人: 未开启的 I/II/III 内政堆按 2 人重组重洗.
+
+    规则书 p4 体面退出: "在进入时代II或III之前, 玩家按照初始设置根据玩家
+    当前人数重新调整相应的牌堆"。
+    """
+    db = build_card_db()
+    future = {
+        age.value: db.deck_for(age, 3)
+        for age in (Age.I, Age.II, Age.III)
+    }
+    current = ("code_of_laws",) * 7  # 已开启的当前牌堆(时代 A)
+    state = _state(age=Age.A, civil_deck=current, future_decks=future)
+    rng_before = state.rng_state
+    new = apply(state, Resign(), db)
+    assert not new.terminal
+    # 已开启的当前牌堆不变(规则: "不再更改当前的游戏牌堆")
+    assert new.civil_deck == current
+    # 未开启的 I/II/III 堆按 2 人重组(multiset 相等), 且消费 rng 重洗
+    assert set(new.future_decks) == {"I", "II", "III"}
+    for age in (Age.I, Age.II, Age.III):
+        assert Counter(new.future_decks[age.value]) == Counter(
+            db.deck_for(age, 2))
+    assert new.rng_state != rng_before
+
+
+def test_resign_rebuilds_only_unopened_decks() -> None:
+    """时代 II 中退出: 只剩 III 堆未开启, 仅重组 III; 当前 II 堆不变."""
+    db = build_card_db()
+    current = db.deck_for(Age.II, 3)[:5]
+    state = _state(
+        age=Age.II, civil_deck=current,
+        future_decks={Age.III.value: db.deck_for(Age.III, 3)})
+    new = apply(state, Resign(), db)
+    assert new.civil_deck == current
+    assert set(new.future_decks) == {"III"}
+    assert Counter(new.future_decks["III"]) == Counter(db.deck_for(Age.III, 2))
+
+
+def test_resign_rebuild_deterministic() -> None:
+    """同状态两次退出: 重组结果(含 rng_state)一致."""
+    db = build_card_db()
+    future = {age.value: db.deck_for(age, 4)
+              for age in (Age.I, Age.II, Age.III)}
+    players = tuple(_player(f"P{i}") for i in range(4))
+    state = _state(age=Age.A, players=players, future_decks=future)
+    first = apply(state, Resign(), db)
+    second = apply(state, Resign(), db)
+    assert first.future_decks == second.future_decks
+    assert first.rng_state == second.rng_state
+    for age in (Age.I, Age.II, Age.III):
+        assert Counter(first.future_decks[age.value]) == Counter(
+            db.deck_for(age, 3))
+
+
+def test_resign_terminal_no_rebuild() -> None:
+    """2 人局退出即终局: 不重组(无后续时代可进)."""
+    db = build_card_db()
+    future = {age.value: db.deck_for(age, 2)
+              for age in (Age.I, Age.II, Age.III)}
+    state = _state(age=Age.A, players=(_player("P0"), _player("P1")),
+                   future_decks=future)
+    new = apply(state, Resign(), db)
+    assert new.terminal
+    assert new.future_decks == future
 
 
 # --- Julius Caesar 双政治 ----------------------------------------------------------

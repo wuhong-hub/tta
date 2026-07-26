@@ -82,7 +82,7 @@ HOMER = _leader(
 JULIUS_CAESAR = _leader(
     "julius_caesar", "尤利乌斯·凯撒", "Julius Caesar",
     "+1 军力, +1 军事行动。每局游戏一次, 你打出政治行动后可以再打出 1 "
-    "个政治行动(双政治行动 P2-DEFERRED)。",
+    "个政治行动。",
     handler="julius_caesar",
 )
 
