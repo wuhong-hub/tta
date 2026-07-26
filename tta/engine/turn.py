@@ -23,8 +23,9 @@ advance(state, db) 流程:
    的牌)。引擎未做到逐步等待, 但保证了弃牌决策先于推进/下一位回合开始
    (消除时代切换错位与回合开始信息泄漏)。
 2. 推进(proceed): 下一位未退出座位(体面退出者跳过, P2-T10); 回绕座位
-   序列时: last_round -> 终局(terminal, final_scores = 各玩家文化, 事件
-   计分 P2); 否则 round += 1, 且 age 已为 IV 时 last_round = True(非起始
+   序列时: last_round -> 终局计分(events.endgame_scoring: 结算两事件堆
+   中所有时代 III 事件 + 终局奖励效果, terminal, final_scores = 终局文化,
+   P2-T12); 否则 round += 1, 且 age 已为 IV 时 last_round = True(非起始
    玩家回合开启 IV -> 下一轮为最后一轮)。
 3. 回合开始(nxt 玩家): round == 1 -> 全部跳过; 否则弃最左
    N(2/3/4 人 -> 3/2/1)个位置的牌入 removed -> 左移紧凑 -> 补牌
@@ -51,7 +52,7 @@ advance(state, db) 流程:
 
 from dataclasses import replace
 
-from tta.engine import civ, economy, effects, military, politics
+from tta.engine import civ, economy, effects, events, military, politics
 from tta.engine.enums import Age, Phase
 from tta.engine.model import CardDB
 from tta.engine.state import (
@@ -113,12 +114,10 @@ def proceed(state: GameState, db: CardDB) -> GameState:
     if nxt <= state.current_player:
         # 回绕到座位序列前段 -> 新一轮(无退出者时等价于 nxt == 0)
         if state.last_round:
-            # 最后一轮已完整打完 -> 终局(P1 无事件, 仅文化计分)
-            return replace(
-                state,
-                terminal=True,
-                final_scores=tuple(p.culture for p in state.players),
-            )
+            # 最后一轮已完整打完 -> 终局计分: 结算两事件堆中所有时代 III
+            # 事件与终局奖励效果(bill_gates), final_scores = 终局文化
+            # (见 events.endgame_scoring)
+            return events.endgame_scoring(db, state)
         state = replace(state, round=state.round + 1)
         if state.age is Age.IV:
             # IV 于非起始玩家回合开启: 递增后的这一轮为最后一轮

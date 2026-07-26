@@ -1,15 +1,16 @@
-"""事件卡结算注册表与 Age A/I/II 事件处理器(P2-T5/T6/T11).
+"""事件卡结算注册表与 Age A/I/II/III 事件处理器(P2-T5/T6/T11/T12).
 
 EVENT_HANDLERS: handler 名 -> (state, db) -> state。揭示流程见
-politics.seed_event; 未注册的 Age A/I/II 事件 fail-loud(ValueError), 时代
-III 事件在 T12 注册前为无效果过场(TODO, 不阻塞对局)。
+politics.seed_event; 任何时代的事件未注册 handler 均 fail-loud
+(ValueError, 缺失即实现缺陷)。
 
 需要玩家决策的事件压入 pending 链: 从 current_player 起顺时针每座位一个
 PendingEffect(responder=座位), 逐个结算 pop; 增益类选择(可
 DeclineResponse 放弃)见 DECLINABLE_EVENT_KINDS, 强制失去类(raiders/
 border_conflict 等)不可放弃(压入前保证恒有可执行选项, 防卡死)。
 决策动作为 ChooseEventOption(见 apply_event_choice)或事件免费建造的
-Build(见 EVENT_FREE_BUILD)。
+Build(见 EVENT_FREE_BUILD)。时代 III 15 张 Impact 事件全为自动计分类,
+不压 pending(揭示即结算; 未揭示者于终局结算, 见 endgame_scoring)。
 
 强弱比较口径(规则书 p7):
 - "最强/最弱文明"按 civ 军力(civ_values.strength); barbarians 的"文化
@@ -49,6 +50,7 @@ from tta.engine import economy, effects, military
 from tta.engine.civ import civ_values, discontent, hand_limit_civil
 from tta.engine.constants import ROW_COSTS
 from tta.engine.enums import (
+    UNIT_CATEGORIES,
     URBAN_CATEGORIES,
     WORKER_CATEGORIES,
     Age,
@@ -186,18 +188,14 @@ POLITICS_DRAW = 3
 def resolve_event(state: GameState, db: CardDB, card_id: str) -> GameState:
     """揭示事件的统一入口: 查 EVENT_HANDLERS 结算.
 
-    fail-loud: Age A/I/II 事件未注册 handler -> ValueError(T6/T11 拥有
-    Age A/I/II 全量, 缺失即实现缺陷); 时代 III 事件在 T12 注册前为无效果
-    过场(不阻塞对局), 注册后删除该兜底统一 fail-loud。
+    fail-loud: 任何时代的事件未注册 handler -> ValueError(T6/T11/T12 拥有
+    全量事件, 缺失即实现缺陷)。
     """
     card = db.get(card_id)
     handler = EVENT_HANDLERS.get(card.handler)
     if handler is None:
-        if card.age in (Age.A, Age.I, Age.II):
-            msg = f"事件 {card_id!r} 未注册 EVENT_HANDLERS handler"
-            raise ValueError(msg)
-        # TODO(T12): 时代 III 事件 handler 注册前的过场兜底
-        return state
+        msg = f"事件 {card_id!r} 未注册 EVENT_HANDLERS handler"
+        raise ValueError(msg)
     return handler(state, db)
 
 
@@ -1189,3 +1187,385 @@ EVENT_HANDLERS.update({
     "refugees": _refugees,
     "terrorism": _terrorism,
 })
+
+
+# --- 时代 III 事件 handler(卡牌数值表 p4 Events 表 Age III 行, 全为 Impact 计分类) ----
+#
+# 统一口径:
+# - 全为自动计分, 每名在局(未退出)玩家按公式 +文化(仅 impact_of_happiness
+#   可为负, 文化下限 0), 不压 pending;
+# - 农场/矿场"产出"= Σ 工人数 × token_value(每张有工人的卡每回合各产 1 蓝点,
+#   与 economy.produce 同口径);
+# - "级"= 时代序(A=1, I=2, II=3, III=4, 与 effects/politics 的 _TECH_LEVEL
+#   同口径); 同名卡的每个工人 = 一张同等级卡;
+# - 排名类(impact_of_science/strength)平局按当前玩家顺时针近者优先(规则书
+#   p7; 终局结算时起始玩家视作当前玩家, 见 endgame_scoring);
+# - 翻面奇迹(ravages_of_time)仍计入 impact_of_wonders(规则书附录 p12
+#   岁月摧残: 被摧残的奇迹仍视作一个相应时代的已完成的奇迹)。
+
+IMPACT_AGRICULTURE_SURPLUS_BONUS = 4
+"""impact_of_agriculture 产出超过消耗的额外文化."""
+
+IMPACT_BALANCE_MULTIPLIER = 2
+"""impact_of_balance 最低产出的文化倍数."""
+
+IMPACT_COLONIES_CULTURE = 3
+"""impact_of_colonies 每殖民地文化."""
+
+IMPACT_GOVERNMENT_CIVIL_CULTURE = 2
+IMPACT_GOVERNMENT_MILITARY_CULTURE = 1
+"""impact_of_government 每内政/军事行动的文化."""
+
+IMPACT_HAPPINESS_CULTURE = 2
+"""impact_of_happiness 每笑脸 +文化 / 每不快乐工人 -文化."""
+
+IMPACT_POPULATION_THRESHOLD = 10
+IMPACT_POPULATION_CULTURE = 2
+"""impact_of_population 超过阈值的人口每人口文化."""
+
+IMPACT_PROGRESS_CULTURE = 2
+"""impact_of_progress 每级政体与特殊科技的文化."""
+
+IMPACT_TECHNOLOGY_CULTURE = 4
+"""impact_of_technology 每项时代 III 科技的文化."""
+
+IMPACT_VARIETY_CULTURE = 2
+"""impact_of_variety 每种类型的文化."""
+
+IMPACT_RATING_SCORES: dict[int, tuple[int, ...]] = {
+    2: (10, 0),
+    3: (14, 7, 0),
+    4: (15, 10, 5, 0),
+}
+"""排名类 Impact 按在局人数的名次文化表(PDF: 10/0, 14/7/0, 15/10/5/0)."""
+
+IMPACT_WONDER_SCORES: dict[Age, int] = {
+    Age.A: 5, Age.I: 4, Age.II: 3, Age.III: 2,
+}
+"""impact_of_wonders 各时代奇迹分值."""
+
+BILL_GATES = "bill_gates"
+BILL_GATES_RESOURCE_PER_LEVEL = 1
+"""bill_gates: 实验室每级产 1 资源; 终局 +文化 = 该额外产出."""
+
+_TECH_LEVEL: dict[Age, int] = {Age.A: 1, Age.I: 2, Age.II: 3, Age.III: 4}
+"""卡牌等级(级 = 时代序; 与 effects/politics 同口径, 防循环 import 重声明)."""
+
+_COMPETITION_CATEGORIES = UNIT_CATEGORIES | frozenset({CardCategory.ARENA})
+"""impact_of_competition 计等级的类别(军事单位与竞技场)."""
+
+
+def _production_rate(db: CardDB, p: PlayerState, category: CardCategory) -> int:
+    """农场/矿场每回合产出 = Σ 工人数 × token_value."""
+    return sum(
+        workers * db.get(card_id).token_value
+        for card_id, workers in p.buildings.get(category.value, {}).items()
+        if workers > 0
+    )
+
+
+def _building_levels(
+    db: CardDB, p: PlayerState, categories: frozenset[CardCategory],
+) -> int:
+    """指定类别建筑的等级总和(每工人 = 一张同等级卡, 级 = 时代序)."""
+    return sum(
+        workers * _TECH_LEVEL[db.get(card_id).age]
+        for category in categories
+        for card_id, workers in p.buildings.get(category.value, {}).items()
+        if workers > 0
+    )
+
+
+def _building_types(
+    p: PlayerState, categories: frozenset[CardCategory],
+) -> int:
+    """指定类别有工人的卡 id 数(类型数)."""
+    return sum(
+        1
+        for category in categories
+        for workers in p.buildings.get(category.value, {}).values()
+        if workers > 0
+    )
+
+
+def _impact_all(
+    state: GameState, db: CardDB,
+    score: Callable[[CardDB, GameState, int], int],
+) -> GameState:
+    """每名在局玩家按 score(db, state, 座位) 加文化(负值下限 0)."""
+    for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
+        delta = score(db, state, i)
+        if delta:
+            state = replace_player(
+                state, i, replace(p, culture=max(0, p.culture + delta)))
+    return state
+
+
+def _impact_rating(
+    state: GameState, db: CardDB, values: list[int],
+) -> GameState:
+    """排名类 Impact: 按 values 降序排名, 平局按当前玩家顺时针近者优先.
+
+    名次分值按在局(未退出)人数查 IMPACT_RATING_SCORES(规则书 p4: 只剩
+    2 位玩家时按 2 人规则结算事件); 已退出者不参与排名不计分。
+    """
+    active = active_indices(state)
+    table = IMPACT_RATING_SCORES[len(active)]
+    ordered = sorted(
+        active,
+        key=lambda seat: (-values[seat], _clockwise_distance(state, seat)))
+    for rank, seat in enumerate(ordered):
+        gain = table[rank]
+        if gain:
+            p = state.players[seat]
+            state = replace_player(
+                state, seat, replace(p, culture=p.culture + gain))
+    return state
+
+
+def _impact_of_agriculture(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +文化 = 农场产出; 产出超过消耗再 +4."""
+
+    def score(db: CardDB, state: GameState, i: int) -> int:
+        p = state.players[i]
+        production = _production_rate(db, p, CardCategory.FARM)
+        surplus = production > consumption_value(p.yellow_bank)
+        return production + (IMPACT_AGRICULTURE_SURPLUS_BONUS if surplus else 0)
+
+    return _impact_all(state, db, score)
+
+
+def _impact_of_architecture(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +文化 = 城市建筑等级总和."""
+    return _impact_all(
+        state, db,
+        lambda db, state, i: _building_levels(
+            db, state.players[i], URBAN_CATEGORIES))
+
+
+def _impact_of_balance(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +文化 = 2 × 四项产出(科技/文化/食物/资源)的最低值."""
+
+    def score(db: CardDB, state: GameState, i: int) -> int:
+        p = state.players[i]
+        values = civ_values(db, p, state.players, i)
+        least = min(
+            values.science_rate, values.culture_rate,
+            _production_rate(db, p, CardCategory.FARM),
+            _production_rate(db, p, CardCategory.MINE))
+        return IMPACT_BALANCE_MULTIPLIER * least
+
+    return _impact_all(state, db, score)
+
+
+def _impact_of_colonies(state: GameState, db: CardDB) -> GameState:
+    """每个文明每个殖民地 +3 文化."""
+    return _impact_all(
+        state, db,
+        lambda db, state, i: IMPACT_COLONIES_CULTURE * len(state.players[i].colonies))
+
+
+def _impact_of_competition(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +文化 = 军事单位与竞技场的等级总和."""
+    return _impact_all(
+        state, db,
+        lambda db, state, i: _building_levels(
+            db, state.players[i], _COMPETITION_CATEGORIES))
+
+
+def _impact_of_government(state: GameState, db: CardDB) -> GameState:
+    """每个文明每内政行动 +2 文化, 每军事行动 +1 文化(civ 总值)."""
+
+    def score(db: CardDB, state: GameState, i: int) -> int:
+        values = civ_values(db, state.players[i], state.players, i)
+        return (
+            IMPACT_GOVERNMENT_CIVIL_CULTURE * values.civil_actions
+            + IMPACT_GOVERNMENT_MILITARY_CULTURE * values.military_actions)
+
+    return _impact_all(state, db, score)
+
+
+def _impact_of_happiness(state: GameState, db: CardDB) -> GameState:
+    """每个文明每笑脸 +2 文化, 每不快乐工人(discontent) -2 文化."""
+
+    def score(db: CardDB, state: GameState, i: int) -> int:
+        p = state.players[i]
+        happiness = civ_values(db, p, state.players, i).happiness
+        return IMPACT_HAPPINESS_CULTURE * (
+            happiness - discontent(db, p, state.players, i))
+
+    return _impact_all(state, db, score)
+
+
+def _impact_of_industry(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +文化 = 矿场资源产出.
+
+    bill_gates 实验室产资源不计入(规则书附录 p12 比尔·盖茨: 结算工业的
+    影响时, 因本牌效果实验室生产的资源数量不会被计算在内)。
+    """
+    return _impact_all(
+        state, db,
+        lambda db, state, i: _production_rate(
+            db, state.players[i], CardCategory.MINE))
+
+
+def _impact_of_population(state: GameState, db: CardDB) -> GameState:
+    """每个文明超过 10 的每个人口 +2 文化(人口 = 工人总数)."""
+    return _impact_all(
+        state, db,
+        lambda db, state, i: IMPACT_POPULATION_CULTURE * max(
+            0, workers_total(state.players[i]) - IMPACT_POPULATION_THRESHOLD))
+
+
+def _impact_of_progress(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +2 文化 × (政体等级 + 已研发特殊科技等级和)."""
+
+    def score(db: CardDB, state: GameState, i: int) -> int:
+        p = state.players[i]
+        levels = _TECH_LEVEL[db.get(p.government).age]
+        levels += sum(
+            _TECH_LEVEL[db.get(card_id).age]
+            for card_id in p.developed
+            if db.get(card_id).category is CardCategory.SPECIAL)
+        return IMPACT_PROGRESS_CULTURE * levels
+
+    return _impact_all(state, db, score)
+
+
+def _impact_of_science(state: GameState, db: CardDB) -> GameState:
+    """按科技增速排名计分(2p 10/0, 3p 14/7/0, 4p 15/10/5/0)."""
+    rates = [
+        civ_values(db, p, state.players, i).science_rate
+        for i, p in enumerate(state.players)
+    ]
+    return _impact_rating(state, db, rates)
+
+
+def _impact_of_strength(state: GameState, db: CardDB) -> GameState:
+    """按 civ 军力排名计分(分值表同 impact_of_science)."""
+    return _impact_rating(state, db, _strengths(db, state))
+
+
+def _impact_of_technology(state: GameState, db: CardDB) -> GameState:
+    """每个文明每项时代 III 科技 +4 文化(政体算科技, 同 first_space_flight
+    口径; 按已研发卡计, 同名卡只计一次)."""
+
+    def score(db: CardDB, state: GameState, i: int) -> int:
+        p = state.players[i]
+        count = sum(
+            1 for card_id in p.developed if db.get(card_id).age is Age.III)
+        if db.get(p.government).age is Age.III:
+            count += 1
+        return IMPACT_TECHNOLOGY_CULTURE * count
+
+    return _impact_all(state, db, score)
+
+
+def _impact_of_variety(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +2 文化/类型: 军事单位、城市建筑与特殊(蓝色)科技.
+
+    单位/城市建筑按有工人的卡 id 计类型; 特殊科技按已研发卡计。
+    """
+
+    def score(db: CardDB, state: GameState, i: int) -> int:
+        p = state.players[i]
+        types = _building_types(p, UNIT_CATEGORIES | URBAN_CATEGORIES)
+        types += sum(
+            1 for card_id in p.developed
+            if db.get(card_id).category is CardCategory.SPECIAL)
+        return IMPACT_VARIETY_CULTURE * types
+
+    return _impact_all(state, db, score)
+
+
+def _impact_of_wonders(state: GameState, db: CardDB) -> GameState:
+    """每个文明按已完成奇迹 +文化: A 5 / I 4 / II 3 / III 2.
+
+    翻面奇迹(ravages_of_time)仍计入(规则书附录 p12 岁月摧残: 被摧残的
+    奇迹仍视作一个相应时代的已完成的奇迹); 翻面奇迹留在 wonders 中, 直接
+    遍历即含。
+    """
+    return _impact_all(
+        state, db,
+        lambda db, state, i: sum(
+            IMPACT_WONDER_SCORES[db.get(card_id).age]
+            for card_id in state.players[i].wonders))
+
+
+EVENT_HANDLERS.update({
+    "impact_of_agriculture": _impact_of_agriculture,
+    "impact_of_architecture": _impact_of_architecture,
+    "impact_of_balance": _impact_of_balance,
+    "impact_of_colonies": _impact_of_colonies,
+    "impact_of_competition": _impact_of_competition,
+    "impact_of_government": _impact_of_government,
+    "impact_of_happiness": _impact_of_happiness,
+    "impact_of_industry": _impact_of_industry,
+    "impact_of_population": _impact_of_population,
+    "impact_of_progress": _impact_of_progress,
+    "impact_of_science": _impact_of_science,
+    "impact_of_strength": _impact_of_strength,
+    "impact_of_technology": _impact_of_technology,
+    "impact_of_variety": _impact_of_variety,
+    "impact_of_wonders": _impact_of_wonders,
+})
+
+
+# --- 终局计分(规则书 p1 游戏流程) ---------------------------------------------------
+
+
+def endgame_scoring(db: CardDB, state: GameState) -> GameState:
+    """终局计分: 时代 III 事件 -> 终局奖励效果 -> terminal + final_scores.
+
+    规则书 p1: 最后的游戏轮过后, 以任意顺序结算当前和未来事件牌堆中所有
+    时代 III 的事件牌, 再结算所有游戏结束时能够结算的奖励效果(例如
+    比尔·盖茨), 最高文化获胜(并列共享, 由 orchestrator 判定)。
+    引擎约定结算顺序: current_events 先、future_events 后, 各自原顺序;
+    非时代 III 的卡不结算并留堆(终局状态仅作记录)。已结算事件入
+    past_events。终局的事件平局比较以起始玩家(0 号位)视作当前玩家
+    (规则书 p7 结算事件), 结算期间 current_player 临时置 0, 结算后还原。
+    Impact 事件全为自动计分类, 不压 pending(若压 pending 终局会悬空,
+    属实现缺陷)。
+    """
+    current_player = state.current_player
+    state = replace(state, current_player=0)
+    piles = state.current_events + state.future_events
+    resolved = tuple(
+        card_id for card_id in piles if db.get(card_id).age is Age.III)
+    for card_id in resolved:
+        state = resolve_event(state, db, card_id)
+        state = replace(state, past_events=state.past_events + (card_id,))
+    state = replace(
+        state,
+        current_events=tuple(
+            c for c in state.current_events if db.get(c).age is not Age.III),
+        future_events=tuple(
+            c for c in state.future_events if db.get(c).age is not Age.III))
+    state = _bill_gates_endgame(db, state)
+    return replace(
+        state,
+        current_player=current_player,
+        terminal=True,
+        final_scores=tuple(p.culture for p in state.players),
+    )
+
+
+def _bill_gates_endgame(db: CardDB, state: GameState) -> GameState:
+    """bill_gates 终局奖励: +文化 = 实验室额外产出 = Σ 有工人实验室
+    工人数 × 等级(级 = 时代序).
+
+    实验室每回合按矿山方式产资源的经济改造 P2-DEFERRED(不影响
+    impact_of_industry, 规则书附录明示不计); 本函数仅结算规则书 p1 的
+    游戏结束奖励效果。
+    """
+    for i, p in enumerate(state.players):
+        if p.resigned or p.leader != BILL_GATES:
+            continue
+        extra = _building_levels(db, p, frozenset({CardCategory.LAB}))
+        extra *= BILL_GATES_RESOURCE_PER_LEVEL
+        if extra:
+            state = replace_player(
+                state, i, replace(p, culture=p.culture + extra))
+    return state
