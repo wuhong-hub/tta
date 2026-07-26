@@ -52,6 +52,15 @@ def _db() -> CardDB:
                           wonder_stages=(3, 2)),
         "wonder_i": _card("wonder_i", CardCategory.WONDER, Age.I,
                           wonder_stages=(2,)),
+        # 军事手牌/条约填充卡(过期处理测试用)
+        "bonus_a": _card(
+            "bonus_a", CardCategory.BONUS, deck=DeckType.MILITARY),
+        "bonus_i": _card(
+            "bonus_i", CardCategory.BONUS, Age.I, deck=DeckType.MILITARY),
+        "pact_i": _card(
+            "pact_i", CardCategory.PACT, Age.I, deck=DeckType.MILITARY),
+        "pact_ii": _card(
+            "pact_ii", CardCategory.PACT, Age.II, deck=DeckType.MILITARY),
     }
     # 牌列/牌堆填充卡(行动卡, 无数值); 每时代 20 张
     for age, prefix in ((Age.A, "xa"), (Age.I, "xi"),
@@ -294,6 +303,50 @@ def test_age_i_end_obsolescence_and_yellow_loss() -> None:
     assert [p.yellow_bank for p in new.players] == [16, 16]
     # 已研发科技不受影响
     assert new.players[0].developed == ("philosophy",)
+
+
+def test_age_end_discards_obsolete_military_hand() -> None:
+    # 规则书 p3: 时代结束时弃置手中**所有**过期卡牌(含军事手牌);
+    # 军事弃牌堆按时代分立, 旧时代军事牌随时代更替放回盒中 -> 过期军事
+    # 手牌直接入 removed(与旧军事弃牌堆同归宿), 不过期的保留
+    p1 = _player("P1", hand_military=("bonus_a", "bonus_i"))
+    state = _state(
+        round=2,
+        age=Age.I,
+        current_player=0,
+        players=(_player("P0"), p1),
+        card_row=_full_row("xi"),
+        civil_deck=("xi13",),
+        future_decks={"II": ("xii0", "xii1", "xii2")},
+    )
+    new = turn.advance(state, _db())
+    assert new.age is Age.II
+    q = new.players[1]
+    assert q.hand_military == ("bonus_i",)
+    assert "bonus_a" in new.removed
+    assert "bonus_a" not in new.military_discard
+
+
+def test_age_end_removes_obsolete_pacts() -> None:
+    # 规则书 p3: 过期的条约牌从游戏中移除(双方同删, 单份入 removed,
+    # 与 politics._remove_pact 同口径); 时代 I 条约于时代 II 结束后失效,
+    # 时代 II 条约保留
+    p0 = _player("P0", pacts=(("pact_i", "A"), ("pact_ii", "A")))
+    p1 = _player("P1", pacts=(("pact_i", "B"), ("pact_ii", "B")))
+    state = _state(
+        round=3,
+        age=Age.II,
+        current_player=0,
+        players=(p0, p1),
+        card_row=_full_row("xii"),
+        civil_deck=("xii13",),
+        future_decks={"III": ("xiii0", "xiii1", "xiii2")},
+    )
+    new = turn.advance(state, _db())
+    assert new.age is Age.III
+    assert new.players[0].pacts == (("pact_ii", "A"),)
+    assert new.players[1].pacts == (("pact_ii", "B"),)
+    assert new.removed.count("pact_i") == 1
 
 
 def test_age_end_yellow_loss_floor_zero() -> None:

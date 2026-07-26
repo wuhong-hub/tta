@@ -415,7 +415,7 @@ def _pending_actions(
     if pending.kind == politics.KIND_COLONIZE_SACRIFICE:
         return _colonize_sacrifice_actions(db, p, pending)
     if pending.kind == politics.KIND_AGGRESSION_DEFENSE:
-        return _aggression_defense_actions(db, p, pending)
+        return _aggression_defense_actions(db, p, pending, state)
     if pending.kind == politics.KIND_AGGRESSION_PLUNDER:
         # plunder: 食物/资源组合(按价值共 amount), 恒可执行(不足封顶)
         amount = int(pending.context["amount"])
@@ -452,16 +452,21 @@ def _pending_actions(
 
 def _aggression_defense_actions(
     db: CardDB, p: PlayerState, pending: PendingEffect,
+    state: GameState | None = None,
 ) -> list[Action]:
     """侵略防御响应: 奖励牌 / 弃牌 +1 军力 / PassResponse.
 
-    规则书 p4 限制: 打出+弃置的牌总数不能超过防御方总军事行动点数
-    (defense_cards 计数, 达上限后仅剩 PassResponse)。PassResponse 恒可用
-    (对手可不与你比较, 规则书 p4)。
+    规则书 p4 限制: 打出+弃置的牌总数不能超过防御方**总**军事行动点数
+    (civ 总值, 非剩余红点; defense_cards 计数, 达上限后仅剩 PassResponse)。
+    PassResponse 恒可用(对手可不与你比较, 规则书 p4)。
     """
+    if state is None:  # pragma: no cover - legal_actions 恒传入
+        return []
+    idx = acting_index(state)
+    limit = civ_values(db, p, state.players, idx).military_actions
     actions: list[Action] = []
     used = int(pending.context.get("defense_cards", 0))
-    if used < p.military_actions:
+    if used < limit:
         for card_id in dict.fromkeys(p.hand_military):
             card = db.get(card_id)
             if card.category is CardCategory.BONUS and card.defense_bonus > 0:

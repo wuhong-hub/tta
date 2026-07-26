@@ -221,18 +221,37 @@ def test_defense_legal_actions() -> None:
     assert PassResponse() in legal
 
 
-def test_defense_cards_capped_by_military_actions() -> None:
-    # 规则书 p4 限制: 打出+弃置的牌总数不能超过防御方总军事行动点数
+def test_defense_cards_capped_by_total_military_actions() -> None:
+    # 规则书 p4 限制: 打出+弃置的牌总数不能超过防御方**总**军事行动点数
+    # (civ 总值; 专制 = 2, 与剩余红点无关)
     db = build_card_db()
     p1 = _player(
         "P1",
         hand_military=("defense_colonization_i", "defense_colonization_i"),
-        military_actions=1,
+        military_actions=1,  # 剩余 1 红点, 上限仍为总点数 2
     )
     state = _launched(_state(players=(_aggressor(), p1)))
     state = apply(state, PlayDefenseBonus("defense_colonization_i"), db)
+    # 已用 1 张 < 总点数 2 -> 第 2 张仍可用
+    assert PlayDefenseBonus("defense_colonization_i") in legal_actions(db, state)
+    state = apply(state, PlayDefenseBonus("defense_colonization_i"), db)
+    # 已用 2 张 = 总点数 -> 仅剩 PassResponse
+    assert legal_actions(db, state) == [PassResponse()]
+
+
+def test_defense_with_zero_remaining_red_points() -> None:
+    # 防御方剩余红点已用完(0), 仍可按总军事行动点数(2)打出/弃置防御
+    db = build_card_db()
+    p1 = _player(
+        "P1",
+        hand_military=("defense_colonization_i", "fighting_band"),
+        military_actions=0,
+    )
+    state = _launched(_state(players=(_aggressor(), p1)))
     legal = legal_actions(db, state)
-    assert legal == [PassResponse()]
+    assert PlayDefenseBonus("defense_colonization_i") in legal
+    assert DiscardForStrength("fighting_band") in legal
+    assert PassResponse() in legal
 
 
 # --- 防御判定 ------------------------------------------------------------------

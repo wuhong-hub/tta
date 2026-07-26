@@ -37,8 +37,10 @@ advance(state, db) 流程:
      I 堆继续补(官方规则: 时代 A 结束 nothing else happens -> 无过期,
      也无每人 -2 黄点);
    - 时代 I/II 于当前牌堆最后一张放上牌列时结束: 过期处理(更早时代手牌
-     入弃牌堆; 过期领袖入 removed 并清 None, leader_ages 保留; 过期未完成
-     奇迹已付阶段蓝点退回 blue_bank 后入 removed) -> 每人 yellow_bank -2
+     入弃牌堆; 更早时代军事手牌入 removed[军事弃牌堆按时代分立, 旧时代
+     军事牌放回盒中]; 过期条约双方同删、单份入 removed[规则书 p3]; 过期
+     领袖入 removed 并清 None, leader_ages 保留; 过期未完成奇迹已付阶段
+     蓝点退回 blue_bank 后入 removed) -> 每人 yellow_bank -2
      (下限 0) -> 启用下一时代牌堆继续补;
    - 时代 III 牌堆尽 -> 时代 IV: 先执行与 I/II 结束同一序列(过期处理 +
      每人 yellow_bank -2, 下限 0), 再停止补牌; 时代 IV 无牌堆但回合开始仍
@@ -288,9 +290,13 @@ def _age_end_cleanup(
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[PlayerState, ...]]:
     """时代结束共有序列: 过期处理 + 每人 -2 黄点(时代 A 结束不执行).
 
-    过期处理: 更早时代手牌入弃牌堆; 过期领袖入 removed 并清 None
-    (leader_ages 保留); 过期未完成奇迹已付阶段蓝点退回 blue_bank 后
-    入 removed。返回 (removed, discard, players) 供调用方组装新状态。
+    过期处理: 更早时代手牌入弃牌堆; 更早时代军事手牌入 removed(规则书 p3:
+    弃置手中所有过期卡牌; 军事弃牌堆按时代分立, 旧时代军事牌于本次更替
+    放回盒中, 故与旧军事弃牌堆同归宿); 过期条约从游戏中移除(规则书 p3,
+    双方同删、单份入 removed, 与 politics._remove_pact 同口径); 过期领袖
+    入 removed 并清 None(leader_ages 保留); 过期未完成奇迹已付阶段蓝点
+    退回 blue_bank 后入 removed。返回 (removed, discard, players) 供调用方
+    组装新状态。
     """
     removed = state.removed
     discard = state.discard
@@ -304,6 +310,25 @@ def _age_end_cleanup(
             else:
                 kept.append(card_id)
         p = replace(p, hand_civil=tuple(kept))
+        # 过期军事手牌入 removed(规则书 p3: 手中所有过期卡牌, 含军事手牌)
+        kept_military: list[str] = []
+        for card_id in p.hand_military:
+            if _is_obsolete(db, card_id, ended):
+                removed += (card_id,)
+            else:
+                kept_military.append(card_id)
+        p = replace(p, hand_military=tuple(kept_military))
+        # 过期条约从游戏中移除: 双方各删己方记录(双方同删), A 侧恰一份,
+        # 仅 A 侧计 1 份入 removed(与 politics._remove_pact 同口径)
+        if p.pacts:
+            kept_pacts: list[tuple[str, str]] = []
+            for card_id, side in p.pacts:
+                if _is_obsolete(db, card_id, ended):
+                    if side == "A":
+                        removed += (card_id,)
+                else:
+                    kept_pacts.append((card_id, side))
+            p = replace(p, pacts=tuple(kept_pacts))
         # 过期领袖入 removed 并清 None(leader_ages 保留)
         if p.leader is not None and _is_obsolete(db, p.leader, ended):
             removed += (p.leader,)

@@ -4,7 +4,7 @@
 3 人整局(覆盖条约双录/多目标战争), 每步断言:
 
 1. 黄点守恒(每人): yellow_bank + worker_pool + 建筑工人数
-   = 25 − 2 × (已结束的时代 I/II/III 数) + 转移净转入。
+   = 25 − 2 × (已结束的时代 I/II/III 数) + 转移净转入 + 殖民地配件盒补偿。
    口径说明: 时代 A 结束官方规则 "nothing else happens"(无 −2),
    时代 I/II/III 结束各 −2(turn.py AGE_END_YELLOW_LOSS; III 结束进入
    时代 IV 前在 _enter_age_four 执行同一序列)。由 state.age 推断已结束的
@@ -12,11 +12,15 @@
    下限 0 截断(max(0, bank − 2)), 时代结束时 yellow_bank 实际恒 ≥ 2,
    等号成立。玩家间零和转移 = uncertain_borders 事件(时代 I, 最弱银行
    转 1 黄点给最强银行)与领土之战(war_over_territory_ii, 黄点银行
-   转移, P2-T9); 驱动循环在转移步骤按结算前后差值累计净转入
-   (yellow_adj)并断言零和, 其余步骤严格等号。
+   转移, P2-T9); 殖民地永久黄/蓝标记来自配件盒(非 25/16 池内), 竞拍
+   赢得自配件盒入银行, annex/独立宣言失去按银行下限 0 归还
+   (_colony_token_deltas 口径); 驱动循环在转移/殖民步骤按结算前后差值
+   累计净转入(yellow_adj/blue_adj)并断言扣除配件盒收支后零和,
+   其余步骤严格等号。
 2. 蓝点守恒(每人, 精确等号): blue_bank + Σ card_tokens + 进行中奇迹
    已付阶段数 == 16 + 3 × (本局已成功研发 justice_system +
-   civil_service 的次数, 由驱动循环按 DevelopTech 动作追踪)。
+   civil_service 的次数, 由驱动循环按 DevelopTech 动作追踪)
+   + 殖民地配件盒蓝标记补偿(blue_adj)。
    官方规则: 支付(建造/升级/增人口/食物消耗/腐败)所花蓝点放回
    blue_bank, 奇迹完成时其上蓝点也放回 blue_bank, 总量守恒 = 16
    (+ justice_system / civil_service 研发各从盒中 +3)。注意同类型
@@ -63,14 +67,16 @@ import pytest
 
 from tta.cards import build_card_db
 from tta.engine import effects, politics
-from tta.engine.actions import DevelopTech, Resign, SeedEvent
+from tta.engine.actions import ColonizeSacrifice, DevelopTech, Resign, SeedEvent
 from tta.engine.apply import apply
 from tta.engine.civ import civ_values
-from tta.engine.enums import Age, CardCategory, DeckType
+from tta.engine.enums import Age, CardCategory, DeckType, Phase
 from tta.engine.legal import legal_actions
 from tta.engine.setup import new_game
 from tta.engine.state import (
+    ROW_SLOTS,
     GameState,
+    PendingEffect,
     PlayerState,
     from_dict,
     state_hash,
@@ -196,26 +202,66 @@ def _blue_ceiling(blue_gains: int) -> int:
     return BLUE_INITIAL_TOTAL + BLUE_GAIN_AMOUNT * blue_gains
 
 
+def _colony_token_deltas(
+    db, before: GameState, after: GameState,
+) -> tuple[list[int], list[int]]:
+    """本步每玩家殖民地永久黄/蓝标记变动(配件盒收支口径).
+
+    殖民地永久黄/蓝标记来自配件盒(非 25/16 池内): 获得殖民地时自配件盒
+    入银行(负值标记下限 0 截断, 与 politics._grant_colony 同口径; 黄点
+    永久标记全卡池非负, 故步前银行口径精确), 失去殖民地(annex /
+    independence_declaration)时按持有方银行下限 0 归还配件盒(与
+    politics._annex_settle / events KIND_EVENT_LOSE_COLONY 同口径)。
+    """
+    yellow: list[int] = []
+    blue: list[int] = []
+    for i, p in enumerate(after.players):
+        q = before.players[i]
+        dyellow = 0
+        dblue = 0
+        for card_id in p.colonies:
+            if card_id not in q.colonies:
+                permanent = db.get(card_id).territory_permanent
+                dyellow += (max(0, q.yellow_bank
+                                + permanent.get("yellow_token", 0))
+                            - q.yellow_bank)
+                dblue += (max(0, q.blue_bank
+                              + permanent.get("blue_token", 0))
+                          - q.blue_bank)
+        for card_id in q.colonies:
+            if card_id not in p.colonies:
+                permanent = db.get(card_id).territory_permanent
+                dyellow -= min(permanent.get("yellow_token", 0), q.yellow_bank)
+                dblue -= min(permanent.get("blue_token", 0), q.blue_bank)
+        yellow.append(dyellow)
+        blue.append(dblue)
+    return yellow, blue
+
+
 def _assert_player_invariants(
     db, state: GameState, p: PlayerState, blue_gains: int, yellow_adj: int = 0,
+    blue_adj: int = 0,
 ) -> None:
     # 黄点守恒(精确等号, 口径见模块 docstring; yellow_adj = uncertain_borders
-    # 净转入, 由驱动循环累计)
+    # 净转入与殖民地配件盒标记补偿之和, 由驱动循环累计)
     assert _yellow_total(p) == _yellow_expected(state.age) + yellow_adj, (
         f"{p.name} 黄点不守恒: {_yellow_total(p)} != "
         f"{_yellow_expected(state.age)} + {yellow_adj} (age={state.age})"
     )
-    # 蓝点精确守恒(支付/消耗/腐败/奇迹完成均放回供给区, 见模块 docstring)
-    assert _blue_total(p) == _blue_ceiling(blue_gains), (
-        f"{p.name} 蓝点不守恒: {_blue_total(p)} != {_blue_ceiling(blue_gains)}"
+    # 蓝点精确守恒(支付/消耗/腐败/奇迹完成均放回供给区, 见模块 docstring;
+    # blue_adj = 殖民地配件盒蓝标记补偿)
+    assert _blue_total(p) == _blue_ceiling(blue_gains) + blue_adj, (
+        f"{p.name} 蓝点不守恒: {_blue_total(p)} != "
+        f"{_blue_ceiling(blue_gains)} + {blue_adj}"
     )
-    # 资源/行动点非负, 银行区间
+    # 资源/行动点非负, 银行区间(上界 = 总量: 工人回银行与配件盒标记均可
+    # 使银行突破 18/16 轨道上限, 见 test_colonization 同名场景测试)
     assert p.culture >= 0
     assert p.science >= 0
     assert p.civil_actions >= 0
     assert p.military_actions >= 0
-    assert 0 <= p.yellow_bank <= 18
-    assert 0 <= p.blue_bank <= _blue_ceiling(blue_gains)
+    assert 0 <= p.yellow_bank <= _yellow_expected(state.age) + max(0, yellow_adj)
+    assert 0 <= p.blue_bank <= _blue_ceiling(blue_gains) + max(0, blue_adj)
     assert all(count >= 0 for count in p.card_tokens.values())
     # 翻面奇迹(ravages_of_time) ⊆ 已完成奇迹(翻面不位移, 仅效果失效)
     assert set(p.wonders_facedown) <= set(p.wonders)
@@ -321,6 +367,7 @@ def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
     event_universe = _event_universe(db, num_players)
     blue_gains = [0] * num_players
     yellow_adj = [0] * num_players
+    blue_adj = [0] * num_players
     steps = 0
     while not state.terminal:
         legal = legal_actions(db, state)
@@ -334,7 +381,9 @@ def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
             blue_gains[state.current_player] += 1
         # 黄点零和转移步骤识别(口径见模块 docstring 第 1 条):
         # ① uncertain_borders 揭示(筹划动作 + 当前事件堆顶即该事件);
-        # ② 领土之战于本步结算(war_over_territory_ii 离开 declared_wars)。
+        # ② 领土之战于本步结算(war_over_territory_ii 离开 declared_wars);
+        # ③ 殖民地变动(竞拍赢得 / annex 转移 / independence 失去):
+        # 永久黄/蓝标记自配件盒收支(非零和, 见 _colony_token_deltas)。
         uncertain = (
             isinstance(action, SeedEvent)
             and state.current_events[:1] == ("uncertain_borders",)
@@ -344,7 +393,9 @@ def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
             for p in state.players for card_id, _ in p.declared_wars
         )
         before = [_yellow_total(p) for p in state.players]
+        blue_before = [_blue_total(p) for p in state.players]
         age_before = state.age
+        prev = state
         state = apply(state, action, db)
         ended = (_AGE_ENDED_YELLOW_LOSS_COUNT[state.age]
                  - _AGE_ENDED_YELLOW_LOSS_COUNT[age_before])
@@ -352,16 +403,34 @@ def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
             _yellow_total(p) - before[i] + AGE_END_YELLOW_LOSS * ended
             for i, p in enumerate(state.players)
         ]
+        blue_deltas = [
+            _blue_total(p) - blue_before[i]
+            for i, p in enumerate(state.players)
+        ]
         territory_wars_after = sum(
             card_id == "war_over_territory_ii"
             for p in state.players for card_id, _ in p.declared_wars
         )
-        if uncertain or territory_wars_after < territory_wars_before:
-            # 转移步骤: 玩家间零和(不足封顶仍零和), 累计净转入
-            assert sum(deltas) == 0, (
-                f"seed {seed} step {steps} 黄点转移非零和: {deltas}")
-            for i, delta in enumerate(deltas):
-                yellow_adj[i] += delta
+        colony_changed = any(
+            p.colonies != prev.players[i].colonies
+            for i, p in enumerate(state.players)
+        )
+        if (uncertain or territory_wars_after < territory_wars_before
+                or colony_changed):
+            # 转移/殖民步骤: 扣除殖民地配件盒收支后, 玩家间转移零和
+            # (不足封顶仍零和), 实际差额全额累计为补偿项
+            colony_yellow, colony_blue = _colony_token_deltas(db, prev, state)
+            transfer_yellow = [
+                deltas[i] - colony_yellow[i] for i in range(num_players)]
+            transfer_blue = [
+                blue_deltas[i] - colony_blue[i] for i in range(num_players)]
+            assert sum(transfer_yellow) == 0, (
+                f"seed {seed} step {steps} 黄点转移非零和: {transfer_yellow}")
+            assert sum(transfer_blue) == 0, (
+                f"seed {seed} step {steps} 蓝点转移非零和: {transfer_blue}")
+            for i in range(num_players):
+                yellow_adj[i] += deltas[i]
+                blue_adj[i] += blue_deltas[i]
         else:
             # 其余步骤: 每人黄点总量仅随时代结束 -2(已加回)变化
             assert all(delta == 0 for delta in deltas), (
@@ -369,7 +438,7 @@ def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
         steps += 1
         for i, p in enumerate(state.players):
             _assert_player_invariants(
-                db, state, p, blue_gains[i], yellow_adj[i])
+                db, state, p, blue_gains[i], yellow_adj[i], blue_adj[i])
         assert _accounted(state) == universe, (
             f"seed {seed} step {steps} 卡牌守恒破坏: "
             f"{_accounted(state) - universe} / {universe - _accounted(state)}"
@@ -423,3 +492,57 @@ def test_state_hash_chain_deterministic(db) -> None:
     assert len(hashes[0]) == len(hashes[1])
     for step, (h1, h2) in enumerate(zip(*hashes, strict=True)):
         assert h1 == h2, f"step {step} hash 分叉: {h1} != {h2}"
+
+
+def _tableau_player(name: str) -> PlayerState:
+    """初始 tableau 玩家(黄点总量 25 = 18 银行 + 1 池 + 6 工人, 蓝点 16)."""
+    return PlayerState(
+        name=name,
+        developed=("agriculture", "agriculture", "bronze", "bronze",
+                   "philosophy", "religion", "warriors"),
+        buildings={
+            "farm": {"agriculture": 2},
+            "mine": {"bronze": 2},
+            "lab": {"philosophy": 1},
+            "infantry": {"warriors": 1},
+        },
+    )
+
+
+def test_colony_permanent_tokens_compensated(db) -> None:
+    """殖民配件盒补偿: 赢得发达地区(永久 1 黄 1 蓝)后守恒公式加补偿项.
+
+    殖民地永久黄/蓝标记来自配件盒(非 25/16 池内), 不补偿则
+    yellow_total = 26 ≠ 25 误报(I4)。
+    """
+    state = GameState(
+        round=2,
+        age=Age.A,
+        current_player=0,
+        card_row=(None,) * ROW_SLOTS,
+        civil_deck=(),
+        future_decks={},
+        discard=(),
+        removed=(),
+        players=(_tableau_player("P0"), _tableau_player("P1")),
+        rng_state=42,
+        phase=Phase.ACTION,
+        pending=(PendingEffect(
+            politics.KIND_COLONIZE_SACRIFICE, 0, responder=0,
+            context={"territory": "developed_territory_i", "bid": 1,
+                     "bonus": 0}),),
+    )
+    # 基线: 时代 A 无 -2, 双方 25 黄 / 16 蓝严格守恒
+    for p in state.players:
+        _assert_player_invariants(db, state, p, 0)
+    new = apply(state, ColonizeSacrifice(("warriors",)), db)
+    assert new.players[0].colonies == ("developed_territory_i",)
+    yellow_adj, blue_adj = _colony_token_deltas(db, state, new)
+    assert yellow_adj == [1, 0]
+    assert blue_adj == [1, 0]
+    # 牺牲 1 武士回银行(总量不变) + 配件盒 +1 黄 -> 26; 配件盒 +1 蓝 -> 17
+    assert _yellow_total(new.players[0]) == 26
+    assert _blue_total(new.players[0]) == 17
+    for i, p in enumerate(new.players):
+        _assert_player_invariants(
+            db, new, p, 0, yellow_adj[i], blue_adj[i])

@@ -312,9 +312,16 @@ def _next_bidder(bidders: list[int], after: int, num_players: int) -> int:
 
 
 def _start_colonization(state: GameState, territory: str) -> GameState:
-    """揭示 TERRITORY: 压入 colonize_bid pending, 从揭示者起顺时针轮转."""
+    """揭示 TERRITORY: 压入 colonize_bid pending, 从揭示者起顺时针轮转.
+
+    已体面退出的玩家不参与竞拍(与 turn.proceed 轮换跳过座位同口径):
+    bidders 不含其座位, 轮转经 _next_bidder 的成员判定自然跳过。
+    """
     n = len(state.players)
-    bidders = [(state.current_player + i) % n for i in range(n)]
+    bidders = [
+        (state.current_player + i) % n for i in range(n)
+        if not state.players[(state.current_player + i) % n].resigned
+    ]
     pending = PendingEffect(
         KIND_COLONIZE_BID, 0, responder=state.current_player,
         context={

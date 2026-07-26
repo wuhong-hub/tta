@@ -243,6 +243,29 @@ def test_last_bidder_may_still_bid_after_others_pass() -> None:
     assert int(s2.pending[0].context["bid"]) == 1
 
 
+def test_resigned_player_excluded_from_bidding() -> None:
+    # 已体面退出的玩家不参与殖民竞拍(与轮换跳过座位同口径): bidders 不含
+    # 其座位, 轮转跳过, 不可出价/胜出
+    db = build_card_db()
+    p0 = _player("P0", hand_military=("development_of_crafts",))
+    resigned_p1 = replace(_player("P1"), resigned=True)
+    state = _state(
+        players=(p0, resigned_p1, _player("P2")),
+        current_events=("developed_territory_i",),
+        phase=Phase.POLITICS,
+    )
+    s1 = apply(state, SeedEvent("development_of_crafts"), db)
+    pending = s1.pending[0]
+    assert pending.kind == politics.KIND_COLONIZE_BID
+    assert pending.context["bidders"] == "0,2"
+    # P0 出价 1 -> 轮转跳过退出者 P1 到 P2 -> P2 退出 -> P0 胜出
+    s2 = apply(s1, ColonizeBid(1), db)
+    assert s2.pending[0].responder == 2
+    s3 = apply(s2, ColonizePass(), db)
+    assert s3.pending[0].kind == politics.KIND_COLONIZE_SACRIFICE
+    assert s3.pending[0].responder == 0
+
+
 # --- 可承诺殖民军力上限 ------------------------------------------------------
 
 
