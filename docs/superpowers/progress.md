@@ -30,3 +30,21 @@ Task 14: complete (f5ad597 + 蓝点闭环修复 fa73959, review clean + reviewer
 全部 14 任务完成,进入 P1 全分支终审
 P1 终审: 6 项规则修正 (commit 6c860e5): 时代III结束序列/领袖首打费用/特殊科技替换/政体查重/hammurabi垫付限次/首航计政体;389 测试全绿
 P1 完成
+
+# P2 军事与政治系统(plan: 2026-07-26-p2-military-politics.md)
+Task 1: complete (commits db7e9a9..96357b9, review clean;Medium 交接: 响应期零合法动作会卡死,T5 必须加 DeclineResponse 兜底并作为验收标准)
+Task 2: complete (commits 96357b9..cf8d5b4, review clean 转录零错误;军事牌堆 A=10, I=43/45/45, II=46/50/50, III=41/45/45;存疑 4 项记 T6/T11 核对)
+Task 3: complete (07e52da + fix dd1db84;reviewer 发现弃牌时序与军事弃牌堆跨时代两项中等问题已修;残留次优口径: 弃牌决策在抓牌后(官方在前),记 P3 打磨)
+Task 4: complete (commits dd1db84..752adb9, review clean;空军翻倍规则经规则书 p9 核验成立;T13 待办: 公共阵型区建模——被替换阵型不应入 military_discard 可回流,应留公共区或 removed)
+Task 5: complete (5e8d618 + fix 96e6cdf;审查发现 civilization 事件缺人口选项已补,抓军事牌去重;TODO 标记: I/II/III 事件过场兜底待 T6/T11/T12 注册后删除)
+Task 6: complete (commits 96e6cdf..9f949aa, review clean;brief 三处事件语义错误以 PDF 为准修正(barbarians/pestilence/reign_of_terror=人口);顺手项: state.py:184 不可达 return 待清理)
+Task 7: complete (6a33095 + fix d4a6d23;审查发现黄点银行越界崩溃已修(钳制 18);P4 交接: runner 合法性闸口会拦 ColonizeSacrifice 精确子集,P4 需同步改造;竞拍出价枚举长列表 P4 注意)
+Task 8: complete (commits d4a6d23..1d9f252, review clean;11 张侵略效果全量核对通过;歧义待裁: raid 取半口径、防御上限按当前红点池)
+Task 9: complete (commits 1d9f252..82ee62e, review clean;战争 3 效果全核对;⚠️ 领土取整无明文已披露)
+Task 10: complete (062528f + fix 2a95211, review clean;⚠️ 待裁: 退出后时代 II/III 牌堆人数重调未实现(brief 与规则书冲突,规则书要求重调);_enter_age_four 起始玩家退出边角;P3 认领: trade_routes/scientific_cooperation 效果、公共阵型区、弃牌决策先于抓牌)
+Task 11: complete (commits 2a95211..f48ce5b, review clean 15/15 事件对照 PDF 全过;brief 四处事件语义猜错以 PDF 为准;T12 注意: 翻面奇迹终局计分口径复查、politics_of_strength 终局分值无明文)
+Task 12: complete (commits f48ce5b..d3f646c, review clean;15 Impact 全核对,终局计分非零;T13 顺手: _impact_of_technology docstring 订正、Gates 遗留归属确认)
+Task 13: complete (commits d3f646c..2b281f1;公共阵型区修复/退出牌堆重调/shakespeare/bach/deferred.md 22+5 项入库;729 测试)
+全部 13 任务完成,进入 P2 全分支终审
+P2 终审: 5 项修正 (commit 90e01e4): 军事手牌/条约过期、退出者禁竞拍、守恒补偿、防御上限总值;734 测试全绿
+P2 完成
