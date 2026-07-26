@@ -1,13 +1,13 @@
-"""事件卡结算注册表与 Age A/I 事件处理器(P2-T5/T6).
+"""事件卡结算注册表与 Age A/I/II 事件处理器(P2-T5/T6/T11).
 
 EVENT_HANDLERS: handler 名 -> (state, db) -> state。揭示流程见
-politics.seed_event; 未注册的 Age A/I 事件 fail-loud(ValueError), 时代
-II/III 事件在 T11/T12 注册前为无效果过场(TODO, 不阻塞对局)。
+politics.seed_event; 未注册的 Age A/I/II 事件 fail-loud(ValueError), 时代
+III 事件在 T12 注册前为无效果过场(TODO, 不阻塞对局)。
 
 需要玩家决策的事件压入 pending 链: 从 current_player 起顺时针每座位一个
 PendingEffect(responder=座位), 逐个结算 pop; 增益类选择(可
 DeclineResponse 放弃)见 DECLINABLE_EVENT_KINDS, 强制失去类(raiders/
-border_conflict)不可放弃(压入前保证恒有可执行选项, 防卡死)。
+border_conflict 等)不可放弃(压入前保证恒有可执行选项, 防卡死)。
 决策动作为 ChooseEventOption(见 apply_event_choice)或事件免费建造的
 Build(见 EVENT_FREE_BUILD)。
 
@@ -25,27 +25,47 @@ Build(见 EVENT_FREE_BUILD)。
 - barbarians / pestilence / reign_of_terror 均为失去人口(棋子图标):
   优先空闲工人池, 不足时按 (类别, card_id) 字典序从有工人的卡上移除
   (SIMPLIFICATION, 官方为玩家自选), 失去的黄点回到黄点银行。
+
+时代 II 事件的 PDF 口径(同上, 与卡牌转录的差异以 PDF 为准):
+- civil_unrest 的"不快乐工人"= civ.discontent(黄点轨道幸福需求 - 笑脸);
+  "最多"为所有平局者(规则书 p7); -1 蓝点取储存中 (token_value, card_id)
+  升序第 1 个回供给区(SIMPLIFICATION 确定性口径);
+- economic_progress "do not ignore consumption & corruption": 按回合生产
+  阶段次序(腐败 -> 食物生产 -> 消耗 -> 资源生产), 不含计分与起义检定;
+- ravages_of_time 翻面奇迹建模为 PlayerState.wonders_facedown: 留在场上
+  (wonders 不变)但效果失效, 每个转为 +2 文化增速(见 civ.civ_values);
+- politics_of_strength 的"最终时代"按 state.age in (III, IV) 判定; 终局
+  ±文化分值 PDF 未给, 按同数值直译(最强 +5 / 最弱 -3, 见任务报告存疑);
+- international_agreement 拿牌白点费自付(从现有白点扣), 预算 5;
+  "跳过下一次政治行动"建模为 PlayerState.miss_political_action(其下一
+  个 POLITICS 相位仅剩 SkipPolitics); 结束后补满卡牌列(SIMPLIFICATION:
+  不触发时代结束处理)。
 """
 
 from collections.abc import Callable
 from dataclasses import replace
 
 from tta.engine import economy, effects, military
-from tta.engine.civ import civ_values
+from tta.engine.civ import civ_values, discontent, hand_limit_civil
+from tta.engine.constants import ROW_COSTS
 from tta.engine.enums import (
     URBAN_CATEGORIES,
+    WORKER_CATEGORIES,
     Age,
     CardCategory,
 )
 from tta.engine.model import CardDB
 from tta.engine.state import (
+    ROW_SLOTS,
     GameState,
     PendingEffect,
     PlayerState,
     acting_index,
     active_indices,
     replace_player,
+    workers_total,
 )
+from tta.engine.tracks import consumption_value, corruption_value
 
 KIND_EVENT_MARKETS = "event_markets"
 """development_of_markets 选择 pending: responder 选 food/resource +2."""
@@ -73,6 +93,24 @@ FORAY_OPTIONS), 可 DeclineResponse 放弃。"""
 KIND_EVENT_RAIDERS = "event_raiders"
 """raiders 失去选择 pending: responder 选食物/资源组合(按价值共 2, 见
 RAIDERS_OPTIONS), 不足部分损失到此为止(强制, 不可放弃)。"""
+
+KIND_EVENT_DESTROY_URBAN = "event_destroy_urban"
+"""terrorism 摧毁城市建筑 pending: responder(受害者)选 1 张有工人的城市
+建筑卡, 移除 1 工人回空闲池(强制, 不可放弃; 失去口径同 border_conflict)。"""
+
+KIND_EVENT_LOSE_COLONY = "event_lose_colony"
+"""independence_declaration 失去殖民地 pending: responder(最弱文明)选
+1 个殖民地失去(强制, 不可放弃); 永久黄/蓝标记归还(下限 0), 地区牌入
+past_events。"""
+
+KIND_EVENT_RAVAGES = "event_ravages"
+"""ravages_of_time 翻面奇迹 pending: responder 选 1 个 A/I 时代已完成奇迹
+翻面(强制, 不可放弃); 翻面入 wonders_facedown(效果失效, 转 +2 文化增速)。"""
+
+KIND_EVENT_AGREEMENT = "event_agreement"
+"""international_agreement 拿牌 pending: responder(最强文明)在预算
+(context["budget"])内逐个拿卡牌列的牌(option 为槽位号字符串), 或
+AGREEMENT_DONE 结束; 结束后补满卡牌列(见 _replenish_card_row)。"""
 
 EVENT_FREE_BUILD: dict[str, str] = {
     KIND_EVENT_RELIGION: "religion",
@@ -148,17 +186,17 @@ POLITICS_DRAW = 3
 def resolve_event(state: GameState, db: CardDB, card_id: str) -> GameState:
     """揭示事件的统一入口: 查 EVENT_HANDLERS 结算.
 
-    fail-loud: Age A/I 事件未注册 handler -> ValueError(T5/T6 拥有 Age A/I
-    全量, 缺失即实现缺陷); 时代 II/III 事件在 T11/T12 注册前为无效果过场
-    (不阻塞对局), 注册后删除该兜底统一 fail-loud。
+    fail-loud: Age A/I/II 事件未注册 handler -> ValueError(T6/T11 拥有
+    Age A/I/II 全量, 缺失即实现缺陷); 时代 III 事件在 T12 注册前为无效果
+    过场(不阻塞对局), 注册后删除该兜底统一 fail-loud。
     """
     card = db.get(card_id)
     handler = EVENT_HANDLERS.get(card.handler)
     if handler is None:
-        if card.age in (Age.A, Age.I):
+        if card.age in (Age.A, Age.I, Age.II):
             msg = f"事件 {card_id!r} 未注册 EVENT_HANDLERS handler"
             raise ValueError(msg)
-        # TODO(T11/T12): 后续时代事件 handler 注册前的过场兜底
+        # TODO(T12): 时代 III 事件 handler 注册前的过场兜底
         return state
     return handler(state, db)
 
@@ -194,17 +232,32 @@ def apply_event_choice(
     if pending.kind == KIND_EVENT_DESTROY_BUILDING:
         # border_conflict: 移除所选建筑卡上 1 工人, 回空闲池
         p = state.players[idx]
-        card = db.get(option)
-        buildings = dict(p.buildings)
-        slots = dict(buildings[card.category.value])
-        left = slots[option] - 1
-        if left > 0:
-            slots[option] = left
-        else:
-            del slots[option]
-        buildings[card.category.value] = slots
-        p = replace(p, buildings=buildings, worker_pool=p.worker_pool + 1)
-        return replace_player(state, idx, p)
+        return replace_player(state, idx, _remove_building_worker(db, p, option))
+    if pending.kind == KIND_EVENT_DESTROY_URBAN:
+        # terrorism: 摧毁所选城市建筑(同 border_conflict 失去口径)
+        p = state.players[idx]
+        return replace_player(state, idx, _remove_building_worker(db, p, option))
+    if pending.kind == KIND_EVENT_LOSE_COLONY:
+        # independence_declaration: 失去所选殖民地; 永久黄/蓝标记归还
+        # (下限 0, 与 annex 受害者侧同口径), 地区牌入 past_events
+        p = state.players[idx]
+        colonies = list(p.colonies)
+        colonies.remove(option)
+        permanent = db.get(option).territory_permanent
+        p = replace(
+            p, colonies=tuple(colonies),
+            yellow_bank=max(0, p.yellow_bank - permanent.get("yellow_token", 0)),
+            blue_bank=max(0, p.blue_bank - permanent.get("blue_token", 0)))
+        state = replace_player(state, idx, p)
+        return replace(state, past_events=state.past_events + (option,))
+    if pending.kind == KIND_EVENT_RAVAGES:
+        # ravages_of_time: 所选 A/I 奇迹翻面(效果失效, 转 +2 文化增速)
+        p = state.players[idx]
+        return replace_player(
+            state, idx,
+            replace(p, wonders_facedown=p.wonders_facedown + (option,)))
+    if pending.kind == KIND_EVENT_AGREEMENT:
+        return _agreement_choice(db, state, pending, idx, option)
     if pending.kind == KIND_EVENT_FORAY:
         # foray: 按所选组合生产(按价值, 见 economy.gain_value)
         p = state.players[idx]
@@ -468,6 +521,34 @@ def destroyable_building_ids(p: PlayerState) -> list[str]:
     return ids
 
 
+def urban_destroyable_ids(p: PlayerState) -> list[str]:
+    """terrorism 可摧毁的城市建筑卡 id(有工人的城市建筑, 类别字典序)."""
+    ids: list[str] = []
+    for category in sorted(URBAN_CATEGORIES, key=lambda c: c.value):
+        ids.extend(
+            card_id
+            for card_id, n in sorted(p.buildings.get(category.value, {}).items())
+            if n > 0
+        )
+    return ids
+
+
+def _remove_building_worker(
+    db: CardDB, p: PlayerState, card_id: str,
+) -> PlayerState:
+    """失去建筑/摧毁城市建筑共用: 所选卡 -1 工人回空闲池."""
+    card = db.get(card_id)
+    buildings = dict(p.buildings)
+    slots = dict(buildings[card.category.value])
+    left = slots[card_id] - 1
+    if left > 0:
+        slots[card_id] = left
+    else:
+        del slots[card_id]
+    buildings[card.category.value] = slots
+    return replace(p, buildings=buildings, worker_pool=p.worker_pool + 1)
+
+
 # --- 时代 I 事件 handler(卡牌数值表 p4 Events 表 Age I 行) ---------------------------
 
 
@@ -672,4 +753,439 @@ EVENT_HANDLERS.update({
     "reign_of_terror": _reign_of_terror,
     "scientific_breakthrough": _scientific_breakthrough,
     "uncertain_borders": _uncertain_borders,
+})
+
+
+# --- 时代 II 事件 handler(卡牌数值表 p4 Events 表 Age II 行) ---------------------------
+
+CIVIL_UNREST_CULTURE_PER_WORKER = 4
+"""civil_unrest 每个不快乐工人失去的文化."""
+
+COLD_WAR_SCIENCE = 6
+"""cold_war 两个最强文明各自获得的科技."""
+
+CRIME_WAVE_CULTURE = 3
+CRIME_WAVE_SCIENCE = 1
+"""crime_wave 两个最弱文明各自失去的文化/科技(下限 0)."""
+
+FOOD_SHORTAGE_CULTURE_PENALTY = 4
+"""食物消耗每缺 1 点损失的文化(与 turn 生产阶段同值; events 不得 import
+turn[循环], 此处重声明)."""
+
+NATIONAL_PRIDE_CULTURE = 5
+"""national_pride 文化分最多的文明获得的文化."""
+
+POLITICS_OF_STRENGTH_DRAW = 5
+"""politics_of_strength 最强文明抓军事牌数(终局改为 +5 文化)."""
+
+POLITICS_OF_STRENGTH_DISCARD = 3
+"""politics_of_strength 最弱文明弃军事牌数(终局改为 -3 文化)."""
+
+PROSPERITY_MAX_POPULATION = 8
+"""prosperity 人口收益上限(PDF: 每个笑脸 +1 人口, max 8)."""
+
+REFUGEES_CULTURE = 3
+"""refugees 最强/最弱文明的文化增减(另 ±1 人口)."""
+
+AGREEMENT_BUDGET = 5
+"""international_agreement 拿牌白点预算(PDF: up to 5 civil actions)."""
+
+AGREEMENT_DONE = "done"
+"""international_agreement 结束拿牌 option(预算内拿牌为"可", 非强制)."""
+
+_AGREEMENT_NO_DUPLICATE = (
+    WORKER_CATEGORIES
+    | frozenset({CardCategory.SPECIAL, CardCategory.GOVERNMENT})
+)
+"""international_agreement 拿牌查重类别(与 legal._take_card_legal 同口径)."""
+
+_FINAL_AGES = (Age.III, Age.IV)
+"""politics_of_strength "最终时代"判定(state.age 处于 III/IV)."""
+
+_RAVAGES_WONDER_AGES = (Age.A, Age.I)
+"""ravages_of_time 可翻面的奇迹时代."""
+
+
+def _civil_unrest(state: GameState, db: CardDB) -> GameState:
+    """每个文明每个不快乐工人 -4 文化; 不快乐工人最多的所有文明各 -1 蓝点;
+    全场无不快乐工人则无效果.
+
+    不快乐工人 = civ.discontent(黄点轨道幸福需求 - 当前笑脸); "最多"平局
+    全部生效(规则书 p7 "所有…最多"口径, 同 immigration)。
+    """
+    active = active_indices(state)
+    unhappy = {
+        i: discontent(db, state.players[i], state.players, i) for i in active
+    }
+    most = max(unhappy.values(), default=0)
+    if most == 0:
+        return state
+    for i in active:
+        p = state.players[i]
+        loss = CIVIL_UNREST_CULTURE_PER_WORKER * unhappy[i]
+        if loss:
+            p = replace(p, culture=max(0, p.culture - loss))
+        if unhappy[i] == most:
+            p = _lose_blue_token(db, p)
+        state = replace_player(state, i, p)
+    return state
+
+
+def _lose_blue_token(db: CardDB, p: PlayerState) -> PlayerState:
+    """失去 1 个储存的蓝点回供给区: (token_value, card_id) 升序取第 1 个
+    (SIMPLIFICATION 确定性口径); 卡上无蓝点则无损失."""
+    candidates = [
+        (db.get(card_id).token_value, card_id)
+        for card_id, n in p.card_tokens.items()
+        if n > 0
+    ]
+    if not candidates:
+        return p
+    _, card_id = min(candidates)
+    tokens = dict(p.card_tokens)
+    left = tokens[card_id] - 1
+    if left > 0:
+        tokens[card_id] = left
+    else:
+        del tokens[card_id]
+    return replace(p, card_tokens=tokens, blue_bank=p.blue_bank + 1)
+
+
+def _cold_war(state: GameState, db: CardDB) -> GameState:
+    """两个最强文明各 +6 科技."""
+    for seat in _strongest_seats(db, state):
+        p = state.players[seat]
+        state = replace_player(
+            state, seat, replace(p, science=p.science + COLD_WAR_SCIENCE))
+    return state
+
+
+def _crime_wave(state: GameState, db: CardDB) -> GameState:
+    """两个最弱文明各 -3 文化与 -1 科技(下限 0)."""
+    for seat in _weakest_seats(db, state):
+        p = state.players[seat]
+        state = replace_player(state, seat, replace(
+            p,
+            culture=max(0, p.culture - CRIME_WAVE_CULTURE),
+            science=max(0, p.science - CRIME_WAVE_SCIENCE)))
+    return state
+
+
+def _economic_progress(state: GameState, db: CardDB) -> GameState:
+    """每名玩家矿场与农场立即生产; 不忽略消耗与腐败.
+
+    按回合生产阶段次序(腐败 -> 食物生产 -> 消耗 -> 资源生产, 见
+    turn._production), 不含计分与起义检定(事件即时结算, 与 good_harvest
+    同口径)。
+    """
+    for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
+        # 腐败: 资源支付, 不足用食物补, 仍不足损失到此为止
+        amount = corruption_value(p.blue_bank)
+        if amount > 0:
+            p, paid = economy.settle_loss(db, p, "resource", amount)
+            p, _ = economy.settle_loss(db, p, "food", amount - paid)
+        # 食物生产 -> 食物消耗(每缺 1 -4 文化, 下限 0)
+        p = economy.produce(db, p, "food")
+        need = consumption_value(p.yellow_bank)
+        if need > 0:
+            p, paid = economy.settle_loss(db, p, "food", need)
+            missing = need - paid
+            if missing > 0:
+                p = replace(p, culture=max(
+                    0, p.culture - FOOD_SHORTAGE_CULTURE_PENALTY * missing))
+        # 资源生产
+        p = economy.produce(db, p, "resource")
+        state = replace_player(state, i, p)
+    return state
+
+
+def _emigration(state: GameState, db: CardDB) -> GameState:
+    """每个文明失去一半人口(向上取整, 移回黄点银行; 失去口径同
+    lose_population: 先空闲池, 不足按字典序从卡上移除)."""
+    for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
+        total = workers_total(p)
+        if total == 0:
+            continue
+        state = replace_player(state, i, lose_population(p, (total + 1) // 2))
+    return state
+
+
+def _iconoclasm(state: GameState, db: CardDB) -> GameState:
+    """弃掉所有非当前时代的在场领袖(入内政弃牌堆, leader_ages 保留)."""
+    for i, p in enumerate(state.players):
+        if p.resigned or p.leader is None:
+            continue
+        if db.get(p.leader).age is state.age:
+            continue
+        state = replace(state, discard=state.discard + (p.leader,))
+        state = replace_player(
+            state, i, replace(state.players[i], leader=None))
+    return state
+
+
+def _independence_declaration(state: GameState, db: CardDB) -> GameState:
+    """最弱文明失去 1 个殖民地(该玩家选择, 强制 pending); 无则无效果."""
+    weakest = _weakest_seats(db, state)[0]
+    if state.players[weakest].colonies:
+        state = _push_chain(state, KIND_EVENT_LOSE_COLONY, [weakest])
+    return state
+
+
+def _international_agreement(state: GameState, db: CardDB) -> GameState:
+    """最强文明可用最多 5 白点从卡牌列拿牌(逐个选择 pending, AGREEMENT_DONE
+    提前结束); 跳过其下一次政治行动; 拿牌结束后补满卡牌列."""
+    strongest = _strongest_seats(db, state)[0]
+    p = state.players[strongest]
+    state = replace_player(
+        state, strongest, replace(p, miss_political_action=True))
+    if agreement_take_options(db, state, state.players[strongest],
+                              AGREEMENT_BUDGET):
+        pending = PendingEffect(
+            KIND_EVENT_AGREEMENT, 0, responder=strongest,
+            context={"budget": AGREEMENT_BUDGET})
+        return replace(state, pending=state.pending + (pending,))
+    # 无可拿之牌(白点/预算不足或行空): 直接补满卡牌列
+    return _replenish_card_row(state)
+
+
+def agreement_take_cost(
+    db: CardDB, p: PlayerState, row_index: int, card_id: str,
+) -> int:
+    """international_agreement 拿牌白点费(与 apply._take_card 同口径)."""
+    card = db.get(card_id)
+    cost = ROW_COSTS[row_index]
+    if card.category is CardCategory.WONDER:
+        cost += effects.wonder_take_surcharge(db, p)
+    if card.category is CardCategory.LEADER:
+        cost = max(0, cost - effects.leader_take_discount(db, p))
+    return cost
+
+
+def agreement_take_options(
+    db: CardDB, state: GameState, p: PlayerState, budget: int,
+) -> list[int]:
+    """international_agreement 可拿槽位: 白点费 <= min(预算, 现有白点).
+
+    其余拿牌约束(手牌上限/查重/奇迹在建/领袖时代)与
+    legal._take_card_legal 同口径; 不含 hammurabi 红点垫付(事件拿牌仅耗
+    白点)。
+    """
+    options: list[int] = []
+    for i, card_id in enumerate(state.card_row):
+        if card_id is None:
+            continue
+        card = db.get(card_id)
+        cost = agreement_take_cost(db, p, i, card_id)
+        if cost > budget or cost > p.civil_actions:
+            continue
+        if card.category is CardCategory.WONDER:
+            # 奇迹牌不受内政手牌上限限制; 有未完成奇迹不可再拿
+            if p.wonder_progress is not None:
+                continue
+        else:
+            if len(p.hand_civil) >= hand_limit_civil(db, p):
+                continue
+            if card.category in _AGREEMENT_NO_DUPLICATE:
+                if card_id in p.hand_civil or card_id in p.developed:
+                    continue
+            if card.category is CardCategory.GOVERNMENT:
+                if card_id == p.government:
+                    continue
+            if card.category is CardCategory.LEADER:
+                if card.age.value in p.leader_ages:
+                    continue
+        options.append(i)
+    return options
+
+
+def _agreement_choice(
+    db: CardDB, state: GameState, pending: PendingEffect, idx: int,
+    option: str,
+) -> GameState:
+    """international_agreement 选择结算: 拿 1 张牌(扣白点与预算)或结束.
+
+    结束后(AGREEMENT_DONE / 预算或白点耗尽无可拿)补满卡牌列。pending[0]
+    已由 apply_event_choice pop; 可继续拿时重压新预算 pending 于栈顶。
+    """
+    if option == AGREEMENT_DONE:
+        return _replenish_card_row(state)
+    row_index = int(option)
+    p = state.players[idx]
+    card_id = state.card_row[row_index]
+    if card_id is None:  # pragma: no cover - legal 已排除
+        msg = f"卡牌列 {row_index} 号位为空"
+        raise ValueError(msg)
+    card = db.get(card_id)
+    cost = agreement_take_cost(db, p, row_index, card_id)
+    row = list(state.card_row)
+    row[row_index] = None
+    state = replace(state, card_row=tuple(row))
+    p = replace(p, civil_actions=p.civil_actions - cost)
+    if card.category is CardCategory.WONDER:
+        p = replace(p, wonder_progress=(card_id, 0))
+    else:
+        p = replace(p, hand_civil=p.hand_civil + (card_id,))
+    # aristotle 等领袖的拿牌即时收益(与 apply._take_card 同口径)
+    gains = effects.on_take_card_gains(db, p, card)
+    if gains:
+        p = replace(p,
+                    science=p.science + gains.get("science", 0),
+                    culture=p.culture + gains.get("culture", 0))
+    state = replace_player(state, idx, p)
+    remaining = int(pending.context["budget"]) - cost
+    if remaining > 0 and agreement_take_options(db, state, p, remaining):
+        nxt = PendingEffect(
+            KIND_EVENT_AGREEMENT, 0, responder=idx,
+            context={"budget": remaining})
+        return replace(state, pending=(nxt,) + state.pending)
+    return _replenish_card_row(state)
+
+
+def _replenish_card_row(state: GameState) -> GameState:
+    """international_agreement 补满卡牌列: 空槽从左到右以当前内政牌堆顶
+    依次填入(SIMPLIFICATION: 不触发时代结束处理, 牌堆尽则留空)."""
+    row = list(state.card_row)
+    deck = list(state.civil_deck)
+    for i in range(ROW_SLOTS):
+        if row[i] is None and deck:
+            row[i] = deck.pop(0)
+    return replace(state, card_row=tuple(row), civil_deck=tuple(deck))
+
+
+def _national_pride(state: GameState, db: CardDB) -> GameState:
+    """文化分最多的文明 +5 文化(平局按顺时针近者优先)."""
+    cultures = [p.culture for p in state.players]
+    leader = _extreme_seats(state, cultures, strongest=True)[0]
+    p = state.players[leader]
+    return replace_player(
+        state, leader, replace(p, culture=p.culture + NATIONAL_PRIDE_CULTURE))
+
+
+def _politics_of_strength(state: GameState, db: CardDB) -> GameState:
+    """最强 +5 军事牌; 最弱 -3 军事牌; 最终时代(III/IV)改为 ±文化.
+
+    - 抓牌共用 military.draw_military(与事件/回合末抓牌同一官方口径);
+    - 弃牌为手牌 -3(SIMPLIFICATION: 按 card_id 字典序确定弃置, 官方为
+      玩家自选; 不足 3 张则全弃);
+    - 终局 ±文化分值 PDF 未给, 按同数值直译(最强 +5 / 最弱 -3 下限 0,
+      见任务报告存疑)。
+    """
+    strongest = _strongest_seats(db, state)[0]
+    weakest = _weakest_seats(db, state)[0]
+    if state.age in _FINAL_AGES:
+        p = state.players[strongest]
+        state = replace_player(state, strongest, replace(
+            p, culture=p.culture + POLITICS_OF_STRENGTH_DRAW))
+        p = state.players[weakest]
+        return replace_player(state, weakest, replace(
+            p, culture=max(0, p.culture - POLITICS_OF_STRENGTH_DISCARD)))
+    state = military.draw_military(
+        state, strongest, POLITICS_OF_STRENGTH_DRAW)
+    p = state.players[weakest]
+    discarded = tuple(sorted(p.hand_military)[:POLITICS_OF_STRENGTH_DISCARD])
+    hand = list(p.hand_military)
+    for card_id in discarded:
+        hand.remove(card_id)
+    state = replace_player(
+        state, weakest, replace(p, hand_military=tuple(hand)))
+    return replace(
+        state, military_discard=state.military_discard + discarded)
+
+
+def _popularization_of_science(state: GameState, db: CardDB) -> GameState:
+    """每个文明 +文化, 等于其科技增速."""
+    for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
+        rate = civ_values(db, p, state.players, i).science_rate
+        if rate:
+            state = replace_player(
+                state, i, replace(p, culture=p.culture + rate))
+    return state
+
+
+def _prosperity(state: GameState, db: CardDB) -> GameState:
+    """每个文明每个笑脸 +1 人口(至多 8; 黄点银行空则尽力而为)."""
+    for i, p in enumerate(state.players):
+        if p.resigned:
+            continue
+        happiness = civ_values(db, p, state.players, i).happiness
+        count = min(happiness, PROSPERITY_MAX_POPULATION, p.yellow_bank)
+        if count:
+            state = replace_player(state, i, replace(
+                p, yellow_bank=p.yellow_bank - count,
+                worker_pool=p.worker_pool + count))
+    return state
+
+
+def ravages_eligible_wonders(db: CardDB, p: PlayerState) -> list[str]:
+    """ravages_of_time 可翻面的奇迹(A/I 时代已完成且未翻面)."""
+    return [
+        card_id for card_id in p.wonders
+        if db.get(card_id).age in _RAVAGES_WONDER_AGES
+        and card_id not in p.wonders_facedown
+    ]
+
+
+def _ravages_of_time(state: GameState, db: CardDB) -> GameState:
+    """每名玩家将 1 个 A/I 奇迹翻面(各自选择, 强制 pending; 效果失效,
+    转为 +2 文化增速, 见 civ.civ_values); 无合格奇迹的玩家跳过."""
+    seats = [
+        seat for seat in _seat_order(state)
+        if ravages_eligible_wonders(db, state.players[seat])
+    ]
+    return _push_chain(state, KIND_EVENT_RAVAGES, seats)
+
+
+def _refugees(state: GameState, db: CardDB) -> GameState:
+    """最弱 -3 文化(下限 0)与 -1 人口; 最强 +3 文化与 +1 人口(银行非空)."""
+    weakest = _weakest_seats(db, state)[0]
+    strongest = _strongest_seats(db, state)[0]
+    p = state.players[weakest]
+    p = replace(p, culture=max(0, p.culture - REFUGEES_CULTURE))
+    state = replace_player(state, weakest, lose_population(p, 1))
+    p = state.players[strongest]
+    p = replace(p, culture=p.culture + REFUGEES_CULTURE)
+    if p.yellow_bank > 0:
+        p = replace(
+            p, yellow_bank=p.yellow_bank - 1,
+            worker_pool=p.worker_pool + 1)
+    return replace_player(state, strongest, p)
+
+
+def _terrorism(state: GameState, db: CardDB) -> GameState:
+    """文化分最少的文明之外, 其他每个文明各摧毁 1 个城市建筑.
+
+    受害者各自选择(强制 pending, 与 border_conflict/raid 的"受害者自选"
+    口径一致; 失去口径: 所选卡 -1 工人回空闲池); 无城市建筑的文明跳过。
+    """
+    cultures = [p.culture for p in state.players]
+    least = _extreme_seats(state, cultures, strongest=False)[0]
+    seats = [
+        seat for seat in _seat_order(state)
+        if seat != least and urban_destroyable_ids(state.players[seat])
+    ]
+    return _push_chain(state, KIND_EVENT_DESTROY_URBAN, seats)
+
+
+EVENT_HANDLERS.update({
+    "civil_unrest": _civil_unrest,
+    "cold_war": _cold_war,
+    "crime_wave": _crime_wave,
+    "economic_progress": _economic_progress,
+    "emigration": _emigration,
+    "iconoclasm": _iconoclasm,
+    "independence_declaration": _independence_declaration,
+    "international_agreement": _international_agreement,
+    "national_pride": _national_pride,
+    "politics_of_strength": _politics_of_strength,
+    "popularization_of_science": _popularization_of_science,
+    "prosperity": _prosperity,
+    "ravages_of_time": _ravages_of_time,
+    "refugees": _refugees,
+    "terrorism": _terrorism,
 })

@@ -35,6 +35,9 @@ from tta.engine.tracks import happiness_required
 MAX_HAPPINESS = 8
 """笑脸总数上限(官方规则 0-8)."""
 
+FACEDOWN_WONDER_CULTURE = 2
+"""翻面(面朝下)奇迹的文化增速(ravages_of_time: 效果失效, 转为生产 2 文化)."""
+
 _COLONY_TOKEN_KEYS = ("yellow_token", "blue_token")
 """殖民地永久效果中的一次性银行标记键(不参与 civ 合成)."""
 
@@ -139,7 +142,11 @@ def civ_values(
                 _add_all(bonus, db.get(card_id).urban_produces, scale=workers)
 
     for card_id in p.wonders:
-        _add_all(bonus, db.get(card_id).wonder_bonus)
+        if card_id in p.wonders_facedown:
+            # 翻面奇迹(ravages_of_time): 效果失效, 转为 +2 文化增速
+            _add_all(bonus, {"culture": FACEDOWN_WONDER_CULTURE})
+        else:
+            _add_all(bonus, db.get(card_id).wonder_bonus)
 
     # 殖民地永久效果(yellow_token/blue_token 为获得时一次性银行调整,
     # 不入合成, 见 politics._grant_colony); 可含负值(如 vast_territory)

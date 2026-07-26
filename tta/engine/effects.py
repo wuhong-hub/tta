@@ -239,7 +239,8 @@ def static_bonuses(db: CardDB, p: PlayerState) -> dict[str, int]:
         card = db.cards.get(card_id)
         if card is not None and card.category is CardCategory.SPECIAL:
             card_ids.append(card_id)
-    card_ids.extend(p.wonders)
+    # 翻面奇迹(ravages_of_time)效果失效, 不参与静态加成
+    card_ids.extend(w for w in p.wonders if w not in p.wonders_facedown)
 
     result: dict[str, int] = {}
     for card_id in card_ids:
@@ -385,6 +386,7 @@ def _michelangelo_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
     culture += sum(
         db.get(card_id).wonder_bonus.get("happiness", 0)
         for card_id in p.wonders
+        if card_id not in p.wonders_facedown  # 翻面奇迹效果失效
     )
     return {"culture": culture} if culture else {}
 

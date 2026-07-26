@@ -433,7 +433,7 @@ COLD_WAR = _event(
 )
 CRIME_WAVE = _event(
     "crime_wave", "犯罪浪潮", "Crime Wave", Age.II,
-    "两个最弱文明 -3 文化并 -1 蓝色标记。",
+    "两个最弱文明 -3 文化并 -1 科技。",
 )
 ECONOMIC_PROGRESS = _event(
     "economic_progress", "经济进步", "Economic Progress", Age.II,
@@ -469,7 +469,7 @@ POPULARIZATION_OF_SCIENCE = _event(
 )
 PROSPERITY = _event(
     "prosperity", "繁荣", "Prosperity", Age.II,
-    "每个文明每个笑脸 +1 食物(至多 8)。",
+    "每个文明每个笑脸 +1 人口(至多 8)。",
 )
 RAVAGES_OF_TIME = _event(
     "ravages_of_time", "岁月侵蚀", "Ravages of Time", Age.II,

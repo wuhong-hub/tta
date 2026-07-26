@@ -74,6 +74,11 @@ class PlayerState:
     resigned: bool = False                   # 已体面退出(文明移除, 轮换跳过)
     civil_action_debt: int = 0               # 下回合白点扣减(rebellion 事件;
                                              # 回合末行动点恢复时生效并清零)
+    # ravages_of_time 翻面(面朝下)的已完成奇迹: 效果失效, 每个转为 +2 文化
+    # 增速(见 civ.civ_values); 仍留在 wonders 中(在场, 计分口径见 T12)
+    wonders_facedown: tuple[str, ...] = ()
+    miss_political_action: bool = False      # 跳过下一次政治行动
+                                             # (international_agreement 事件)
 
 
 @dataclass(frozen=True)
@@ -191,6 +196,12 @@ def _player_to_dict(p: PlayerState) -> dict:
     if p.civil_action_debt:
         # rebellion 下回合白点扣减; 非 0 才落盘(旧格式逐字节兼容)
         data["civil_action_debt"] = p.civil_action_debt
+    if p.wonders_facedown:
+        # ravages_of_time 翻面奇迹; 非空才落盘(旧格式逐字节兼容)
+        data["wonders_facedown"] = list(p.wonders_facedown)
+    if p.miss_political_action:
+        # international_agreement 跳过下一次政治行动; 非 True 不落盘
+        data["miss_political_action"] = True
     return data
 
 
@@ -233,6 +244,8 @@ def _player_from_dict(d: dict) -> PlayerState:
         caesar_used=d.get("caesar_used", False),
         resigned=d.get("resigned", False),
         civil_action_debt=d.get("civil_action_debt", 0),
+        wonders_facedown=tuple(d.get("wonders_facedown", ())),
+        miss_political_action=d.get("miss_political_action", False),
     )
 
 

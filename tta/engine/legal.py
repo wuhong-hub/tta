@@ -64,6 +64,7 @@ from tta.engine.actions import (
     Upgrade,
 )
 from tta.engine.civ import civ_values, hand_limit_civil
+from tta.engine.constants import ROW_COSTS
 from tta.engine.economy import food_total, resource_total
 from tta.engine.enums import (
     UNIT_CATEGORIES,
@@ -75,9 +76,6 @@ from tta.engine.enums import (
 )
 from tta.engine.model import CardDB, CardDefinition
 from tta.engine.state import GameState, PendingEffect, PlayerState, acting_index
-
-ROW_COSTS: tuple[int, ...] = (1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3)
-"""卡牌列各位置拿牌白点费(0-4 号位 1 点, 5-9 号位 2 点, 10-12 号位 3 点)."""
 
 _DECLINABLE_PENDING_KINDS: frozenset[str] = (
     events.DECLINABLE_PENDING_KINDS | frozenset({politics.KIND_WAR_SEIZE})
@@ -334,8 +332,14 @@ def _develop_tech_pending_actions(
 
 def _pending_actions(
     db: CardDB, p: PlayerState, pending: PendingEffect,
+    state: GameState | None = None,
 ) -> list[Action]:
-    """生成可结算首个 pending 的动作(0 行动点, 费用享折扣)."""
+    """生成可结算首个 pending 的动作(0 行动点, 费用享折扣).
+
+    state 仅个别 kind 需要(事件拿卡牌列, 见 international_agreement);
+    legal_actions 恒传入, 行动卡子行动的合法性预判(_action_card_actions)
+    不涉及该类 kind, 缺省 None。
+    """
     categories = effects.PENDING_BUILD_CATEGORIES.get(pending.kind)
     if categories is not None:
         actions = _build_actions(
@@ -370,6 +374,31 @@ def _pending_actions(
             ChooseEventOption(card_id)
             for card_id in events.destroyable_building_ids(p)
         ]
+    if pending.kind == events.KIND_EVENT_DESTROY_URBAN:
+        # terrorism: 选 1 张有工人的城市建筑卡摧毁(强制; 压入前已保证非空)
+        return [
+            ChooseEventOption(card_id)
+            for card_id in events.urban_destroyable_ids(p)
+        ]
+    if pending.kind == events.KIND_EVENT_LOSE_COLONY:
+        # independence_declaration: 选 1 个殖民地失去(强制; 压入前已保证非空)
+        return [ChooseEventOption(colony) for colony in p.colonies]
+    if pending.kind == events.KIND_EVENT_RAVAGES:
+        # ravages_of_time: 选 1 个 A/I 奇迹翻面(强制; 压入前已保证非空)
+        return [
+            ChooseEventOption(card_id)
+            for card_id in events.ravages_eligible_wonders(db, p)
+        ]
+    if pending.kind == events.KIND_EVENT_AGREEMENT:
+        # international_agreement: 预算内拿卡牌列的牌, 或 "done" 结束
+        if state is None:  # pragma: no cover - legal_actions 恒传入
+            return []
+        budget = int(pending.context["budget"])
+        options = events.agreement_take_options(db, state, p, budget)
+        return (
+            [ChooseEventOption(str(i)) for i in options]
+            + [ChooseEventOption(events.AGREEMENT_DONE)]
+        )
     if pending.kind == events.KIND_EVENT_FORAY:
         # foray: 食物/资源组合(按价值共 3), 恒可执行(供给不足尽力而为)
         return [ChooseEventOption(option) for option in events.FORAY_OPTIONS]
@@ -600,7 +629,8 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
         # PassTurn 兜底(放弃全部 pending 并推进回合)仅当行动者即
         # current_player、处于 ACTION 相位且栈中无他玩家 responder。
         actor = acting_index(state)
-        actions = _pending_actions(db, state.players[actor], state.pending[0])
+        actions = _pending_actions(
+            db, state.players[actor], state.pending[0], state)
         if state.pending[0].kind in _DECLINABLE_PENDING_KINDS:
             actions.append(DeclineResponse())
         if (state.pending[0].kind in _DECLINABLE_PENDING_KINDS
@@ -618,7 +648,10 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
         # 体面退出者回合: 文明已移除, 仅剩 PassTurn 推进轮换
         return [PassTurn()]
     if state.phase is Phase.POLITICS:
-        # 政治阶段: 政治动作(每回合限 1, 见 politics.py) + SkipPolitics
+        # 政治阶段: 政治动作(每回合限 1, 见 politics.py) + SkipPolitics;
+        # international_agreement 的"跳过下一次政治行动"生效时仅剩 SkipPolitics
+        if state.players[state.current_player].miss_political_action:
+            return [SkipPolitics()]
         politics_moves: list[Action] = politics.politics_actions(db, state)
         politics_moves.append(SkipPolitics())
         return politics_moves

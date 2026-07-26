@@ -658,9 +658,21 @@ def test_unregistered_age_i_event_fails_loud() -> None:
         apply(state, SeedEvent("development_of_crafts"), db)
 
 
-def test_unregistered_age_ii_event_still_passes_through() -> None:
-    # TODO(T11/T12): 时代 II/III 事件 handler 注册前仍为无效果过场
+def test_unregistered_age_ii_event_fails_loud() -> None:
+    # 时代 II 事件未注册 handler -> ValueError(T11 拥有时代 II 全量)
     db = _db_with_fake_event(Age.II)
+    p0 = _player("P0", hand_military=("development_of_crafts",))
+    state = _state(
+        players=(p0, _player("P1")),
+        current_events=("fake_event_x", "development_of_science"),
+    )
+    with pytest.raises(ValueError, match="fake_event_x"):
+        apply(state, SeedEvent("development_of_crafts"), db)
+
+
+def test_unregistered_age_iii_event_still_passes_through() -> None:
+    # TODO(T12): 时代 III 事件 handler 注册前仍为无效果过场
+    db = _db_with_fake_event(Age.III)
     p0 = _player("P0", hand_military=("development_of_crafts",))
     state = _state(
         players=(p0, _player("P1")),

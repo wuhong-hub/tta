@@ -79,6 +79,12 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
             state = replace(state, pending=())
         return turn.advance(state, db)
     if isinstance(action, SkipPolitics):
+        # 同时清 international_agreement 的"跳过下一次政治行动"标记
+        idx = state.current_player
+        if state.players[idx].miss_political_action:
+            state = replace_player(
+                state, idx,
+                replace(state.players[idx], miss_political_action=False))
         return replace(state, phase=Phase.ACTION)
     if isinstance(action, DeclineResponse):
         # 放弃首个 pending(白名单由 legal 保证); 仅丢弃 pending[0]
