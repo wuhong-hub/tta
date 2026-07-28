@@ -4,7 +4,8 @@
 - 对手军事手牌只显示数量(卡名绝不入渲染), 自己军事手牌卡名可见;
 - 当前事件堆(暗置)/未来事件堆/军事牌堆只显示数量。
 
-本包仅依赖 tta.engine 公开接口; engine/agents/orchestrator 不依赖本包。
+本包仅依赖 tta.engine(渲染)与 tta.agents.base(菜单控制异常)公开接口;
+engine/orchestrator 不依赖本包; agents 中仅 HumanPlayer 经本包做人机交互。
 描述中的费用为卡面静态费用(无 state 口径), 回合修饰/折扣不在此呈现。
 """
 
@@ -437,11 +438,8 @@ _GROUPS: tuple[tuple[str, tuple[type, ...]], ...] = (
 """动作菜单分组(顺序即展示顺序); 未归入者(阵型/结束回合)落 [其他]."""
 
 
-def render_actions(legal: list[Action], db: CardDB) -> str:
-    """合法动作渲染为分组编号菜单(编号全局连续, 菜单输入用).
-
-    空分组不展示; 编号从 1 起, 跨分组连续递增。
-    """
+def _grouped_actions(legal: list[Action]) -> list[tuple[str, list[Action]]]:
+    """合法动作按 _GROUPS 分组(组内保持 legal 相对顺序, 未归组者落 [其他])."""
     buckets: dict[str, list[Action]] = {name: [] for name, _ in _GROUPS}
     others: list[Action] = []
     for action in legal:
@@ -451,20 +449,31 @@ def render_actions(legal: list[Action], db: CardDB) -> str:
                 break
         else:
             others.append(action)
+    groups = [(name, buckets[name]) for name, _ in _GROUPS if buckets[name]]
+    if others:
+        groups.append(("其他", others))
+    return groups
 
+
+def ordered_actions(legal: list[Action]) -> list[Action]:
+    """合法动作按菜单分组重排: render_actions 的编号顺序即本函数顺序.
+
+    菜单输入 N -> 本列表第 N-1 项(编号跨分组全局连续)。
+    """
+    return [action for _, actions in _grouped_actions(legal)
+            for action in actions]
+
+
+def render_actions(legal: list[Action], db: CardDB) -> str:
+    """合法动作渲染为分组编号菜单(编号全局连续, 菜单输入用).
+
+    空分组不展示; 编号从 1 起, 跨分组连续递增。
+    """
     lines = [f"可用动作(共 {len(legal)} 项):"]
     number = 0
-
-    def _emit(group: str, actions: list[Action]) -> None:
-        nonlocal number
-        if not actions:
-            return
+    for group, actions in _grouped_actions(legal):
         lines.append(f"[{group}]")
         for action in actions:
             number += 1
             lines.append(f"  {number}. {describe_action(action, db)}")
-
-    for name, _ in _GROUPS:
-        _emit(name, buckets[name])
-    _emit("其他", others)
     return "\n".join(lines)

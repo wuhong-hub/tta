@@ -48,12 +48,17 @@ class ReplayRecorder:
             "action": action_to_dict(action),
         })
 
+    def write_undo(self, void: int) -> None:
+        """写入悔棋标记: 最近 void 条 decision 作废(回放方应跳过)."""
+        self._write({"type": "undo", "void": void})
+
     def write_result(self, result: Any) -> None:
-        """写入终局结果(GameResult)."""
+        """写入终局结果(GameResult; completed=False 为保存退出的未完成局)."""
         self._write({
             "type": "result",
             "scores": list(result.scores),
             "winners": list(result.winners),
             "rounds": result.rounds,
             "steps": result.steps,
+            "completed": getattr(result, "completed", True),
         })

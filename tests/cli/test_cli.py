@@ -55,3 +55,34 @@ def test_replay_summary(tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert "seed: 42" in out
     assert "winners" in out
+
+
+def test_play_quit_saves_unfinished(tmp_path, monkeypatch, capsys) -> None:
+    """tta play 接线: HumanPlayer 可被注入; 保存退出后写未完成棋谱."""
+    from tta.agents.base import QuitGame
+
+    class _StubHuman:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def choose(self, state, legal, db):  # noqa: ANN001, ANN201
+            raise QuitGame
+
+    monkeypatch.setattr("tta.cli.main.HumanPlayer", _StubHuman)
+    rc = main(["play", "--seat", "0", "--ai", "1", "--seed", "5",
+               "--out", str(tmp_path)])
+    assert rc == 0
+    files = list(tmp_path.glob("*.jsonl"))
+    assert len(files) == 1
+    events = [json.loads(x) for x in files[0].read_text().splitlines()]
+    assert events[-1]["type"] == "result"
+    assert events[-1]["completed"] is False
+    assert "未完成" in capsys.readouterr().out
+
+
+def test_play_invalid_seat(tmp_path, capsys) -> None:
+    """座位越界(>= 总人数)直接报错返回非 0."""
+    rc = main(["play", "--seat", "2", "--ai", "1", "--seed", "5",
+               "--out", str(tmp_path)])
+    assert rc == 2
+    assert not list(tmp_path.glob("*.jsonl"))
