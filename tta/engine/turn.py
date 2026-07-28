@@ -2,26 +2,29 @@
 
 advance(state, db) 流程:
 
-1. 回合末阶段(当前玩家, end_of_turn): 弃多余军事牌(军事手牌上限 = civ
-   军事行动点 + military_hand_extra, 超出部分压入 discard_military pending,
-   由刚结束回合的玩家响应, 逐张 DiscardMilitary 弃至合规) -> 起义检定
-   (is_uprising -> 跳过整个生产阶段) -> 生产(科技/文化按增速计分 ->
-   腐败[资源支付, 不足用食物补, 仍不足损失到此为止] -> 食物生产 ->
-   食物消耗[每缺 1 -4 文化, 文化下限 0] -> 资源生产) -> 抓军事牌
-   (min(剩余红点, 3) 张; 牌堆空则切洗军事弃牌堆重置牌堆, 弃牌堆也空则
-   抓不到; 时代 IV 不抓) -> 恢复行动点(= civ 总值, 同时清零
-   tactics_this_turn; rebellion 事件的 civil_action_debt 于本次恢复时
-   生效并清零, 见 events) -> 重置 turn_discounts
-   (注入领袖回合修饰, 如 homer 军事建造折扣, 见 effects.turn_start_discounts)。
-   官方顺序: 回合结束阶段(含弃牌决策)全部完成后, 才轮到下一位的回合
-   开始。压入 discard_military pending 时 advance 即停(phase 置
-   TURN_START, current_player 保持为响应者), 由响应者弃至合规后
-   apply._discard_military 调 proceed 继续推进。
-   次优口径说明: 官方回合结束阶段顺序为 弃置多余军事牌 -> 起义检定 ->
-   生产 -> 抓取军事牌; pending 虽在"弃置多余军事牌"步骤压入, 但其结算
-   等待发生在整个回合末流程之后(响应者会看到抓牌结果, 弃牌候选含新抓
-   的牌)。引擎未做到逐步等待, 但保证了弃牌决策先于推进/下一位回合开始
-   (消除时代切换错位与回合开始信息泄漏)。
+1. 回合末阶段(当前玩家, end_of_turn), 官方顺序(规则书 p6 回合结束阶段):
+   弃置多余的军事牌 -> 起义检定 -> 生产阶段 -> 抓取军事牌 -> 恢复所有
+   行动点。分两个阶段逐步实现逐步等待(P3-T3):
+   - 阶段 1(end_of_turn): 军事手牌上限 = civ 军事行动点 +
+     military_hand_extra, 超出部分压入 discard_military pending
+     (responder = 刚结束回合的玩家, context 带 {"count": excess,
+     "resume": RESUME_END_OF_TURN_PRODUCTION} 续跑标记)并立即返回;
+     未超限则直接进入阶段 2。
+   - 阶段 2(end_of_turn_production): 起义检定(is_uprising -> 跳过整个
+     生产阶段) -> 生产(科技/文化按增速计分 -> 腐败[资源支付, 不足用食物
+     补, 仍不足损失到此为止] -> 食物生产 -> 食物消耗[每缺 1 -4 文化,
+     文化下限 0] -> 资源生产) -> 抓军事牌(min(剩余红点, 3) 张; 牌堆空则
+     切洗军事弃牌堆重置牌堆, 弃牌堆也空则抓不到; 时代 IV 不抓) -> 恢复
+     行动点(= civ 总值, 同时清零 tactics_this_turn; rebellion 事件的
+     civil_action_debt 于本次恢复时生效并清零, 见 events) -> 重置
+     turn_discounts(注入领袖回合修饰, 如 homer 军事建造折扣, 见
+     effects.turn_start_discounts)。
+   压入 discard_military pending 时 advance 即停(phase 置 TURN_START,
+   current_player 保持为响应者), 由响应者逐张 DiscardMilitary 弃至合规;
+   apply._discard_military 于 count 归零 pop 时识别 resume 标记, 调用
+   end_of_turn_production 从阶段 2 续跑(阶段 1 不重入, 不重复检查超限:
+   阶段 2 抓牌可能使手牌再度超限, 官方口径此时回合已结束, 下次弃牌检查
+   在该玩家下个回合末), 然后 proceed 推进。
 2. 推进(proceed): 下一位未退出座位(体面退出者跳过, P2-T10); 回绕座位
    序列时: last_round -> 终局计分(events.endgame_scoring: 结算两事件堆
    中所有时代 III 事件 + 终局奖励效果, terminal, final_scores = 终局文化,
@@ -77,6 +80,14 @@ AGE_END_YELLOW_LOSS = 2
 MAX_MILITARY_DRAW = 3
 """回合末抓军事牌上限(官方规则: 至多 3 张)."""
 
+RESUME_END_OF_TURN_PRODUCTION = "end_of_turn_production"
+"""discard_military pending context 的续跑标记值(键 "resume").
+
+弃牌 pending 结算完毕(count 归零 pop)时, apply._discard_military 识别
+该标记并调用 end_of_turn_production 从阶段 2 续跑回合末(见模块
+docstring 第 1 条)。
+"""
+
 _AGE_ORDER = (Age.A, Age.I, Age.II, Age.III, Age.IV)
 
 
@@ -85,9 +96,9 @@ def advance(state: GameState, db: CardDB) -> GameState:
 
     相位流转: 当前玩家 ACTION(PassTurn)-> 若超军事手牌上限则 TURN_START
     (等待刚结束回合的玩家逐张 DiscardMilitary 弃至合规, 之后由
-    apply._discard_military 调 proceed 继续)-> 下一位 TURN_START(引擎
-    自动处理回合开始阶段)-> 第一回合直接 ACTION(官方规则: 跳过回合
-    开始阶段与政治阶段), 否则 POLITICS。
+    apply._discard_military 续跑回合末阶段 2 并调 proceed 继续)-> 下一位
+    TURN_START(引擎自动处理回合开始阶段)-> 第一回合直接 ACTION(官方
+    规则: 跳过回合开始阶段与政治阶段), 否则 POLITICS。
     """
     pending_before = len(state.pending)
     state = end_of_turn(state, db)
@@ -137,24 +148,41 @@ def proceed(state: GameState, db: CardDB) -> GameState:
 
 
 def end_of_turn(state: GameState, db: CardDB) -> GameState:
+    """回合末阶段 1: 检查军事手牌超限, 压 discard pending 并立即返回.
+
+    官方顺序(规则书 p6): 弃置多余的军事牌 -> 起义检定 -> 生产 -> 抓取
+    军事牌。超限时压入 discard_military pending(responder = 刚结束回合
+    的玩家, 需弃数量固化于 context, 带 resume 续跑标记)即停——此时
+    起义检定/生产/抓牌/恢复均未发生; 由 apply._discard_military 结算
+    完毕后续跑阶段 2。未超限则直接落入阶段 2。
+    """
     idx = state.current_player
     p = state.players[idx]
     if p.resigned:
         # 体面退出者(P2-T10): 文明已移除, 无回合末阶段(仅 PassTurn 推进)
         return state
     values = civ.civ_values(db, p, state.players, idx)
-    # a. 弃多余军事牌: 手牌 > civ 军事行动点 + military_hand_extra ->
-    # discard_military pending(responder = 刚结束回合的玩家; 官方回合结束
-    # 阶段顺序: 弃置多余的军事牌 -> 起义检定 -> 生产 -> 抓取军事牌。
-    # pending 在"弃置多余军事牌"步骤压入, 但结算等待发生在整个回合末流程
-    # 之后、回合推进之前, 由 apply._discard_military 归零后调 proceed;
-    # 需弃数量已固化于 context)
     hand_limit = values.military_actions + values.military_hand_extra
     excess = len(p.hand_military) - hand_limit
     if excess > 0:
-        state = replace(state, pending=state.pending + (PendingEffect(
+        return replace(state, pending=state.pending + (PendingEffect(
             effects.KIND_DISCARD_MILITARY, 0,
-            responder=idx, context={"count": excess}),))
+            responder=idx,
+            context={"count": excess,
+                     "resume": RESUME_END_OF_TURN_PRODUCTION}),))
+    return end_of_turn_production(state, db)
+
+
+def end_of_turn_production(state: GameState, db: CardDB) -> GameState:
+    """回合末阶段 2: 起义检定 -> 生产 -> 抓军事牌 -> 恢复行动点/清折扣.
+
+    由 end_of_turn(无超限)或 apply._discard_military(弃牌 pending 结算
+    完毕, resume 标记)调用; 不得重入阶段 1(不再检查超限: 抓牌后手牌
+    可能超上限, 官方口径下次弃牌检查在该玩家下个回合末)。
+    """
+    idx = state.current_player
+    p = state.players[idx]
+    values = civ.civ_values(db, p, state.players, idx)
     # b. 起义检定: 起义则跳过整个生产阶段
     if not civ.is_uprising(db, p, state.players, idx):
         p = _production(db, p, values)

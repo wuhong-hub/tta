@@ -46,12 +46,14 @@
    覆盖条约双录)。
 6. state_hash 链: 同 seed 两次逐步走, 每步 hash 相等(见独立测试)。
 7. 军事手牌上限执行(T13): 上限(= civ 军事行动点 + military_hand_extra)
-   仅在回合末弃牌点强制执行, 且引擎口径弃牌检查先于抓牌——discard
-   pending 压入后整个回合末流程(含抓 ≤3 张)才完成, 响应才发生, 故
-   响应期手牌 = 压入时手牌 + 抓取数, 收敛后手牌 = 上限 + 抓取数; 殖民
-   竞拍与 politics_of_strength 事件抽牌亦明示忽略上限。逐步可断言的
-   不变量: discard_military pending 存续期间 1 ≤ context.count ≤
-   响应者手牌数 − 上限(弃牌序列向上限收敛且绝不弃过限)。
+   仅在回合末弃牌点强制执行, 且官方顺序(规则书 p6, P3-T3)弃牌决策
+   先于生产与抓牌——discard pending 压入即停, 响应期手牌 = 压入时手牌
+   (不含新抓牌), 弃至合规后续跑生产/抓牌; 抓牌可能使手牌再度超限,
+   官方口径不再检查(下次弃牌检查在该玩家下个回合末)。殖民竞拍与
+   politics_of_strength 事件抽牌亦明示忽略上限。逐步可断言的不变量:
+   discard_military pending 存续期间 context.count == 响应者手牌数 −
+   上限(每次 DiscardMilitary 手牌与 count 同步 −1, 弃牌序列向上限
+   收敛且绝不弃过限)。
 8. 事件牌堆守恒(T13): 军事牌库中 EVENT/TERRITORY 类别子集 ≡
    current_events + future_events + past_events + removed 中事件类
    + 各玩家军事手牌中事件类 + 各玩家殖民地(竞拍赢得的 TERRITORY)
@@ -349,9 +351,9 @@ def _assert_military_discard_pending_exact(db, state: GameState) -> None:
     """军事手牌上限执行(模块 docstring 第 7 条).
 
     上限 = civ 军事行动点 + military_hand_extra, 仅回合末弃牌点强制执行。
-    引擎口径弃牌检查先于抓牌: pending 压入时 count = 当时手牌 − 上限,
-    随后抓牌使手牌增大, 故存续期间不变量为 1 ≤ count ≤ 手牌数 − 上限
-    (每次 DiscardMilitary 手牌与 count 同步 −1, 差值 = 抓取数不变)。
+    官方顺序(P3-T3): 弃牌决策先于生产与抓牌——pending 压入即停, 存续期间
+    响应者手牌 = 压入时手牌(不含新抓牌), 故不变量为精确等式
+    count == 手牌数 − 上限(每次 DiscardMilitary 手牌与 count 同步 −1)。
     """
     for e in state.pending:
         if e.kind != effects.KIND_DISCARD_MILITARY:
@@ -361,7 +363,7 @@ def _assert_military_discard_pending_exact(db, state: GameState) -> None:
         values = civ_values(db, p, state.players, idx)
         limit = values.military_actions + values.military_hand_extra
         count = int(e.context["count"])
-        assert 1 <= count <= len(p.hand_military) - limit, (
+        assert 1 <= count == len(p.hand_military) - limit, (
             f"{p.name} 弃牌序列越界: count={count}, 手牌 "
             f"{len(p.hand_military)}, 上限 {limit}")
 

@@ -467,8 +467,12 @@ def _discard_military(
     """弃 1 张军事手牌入军事弃牌堆; pending context count 递减, 归零时 pop.
 
     行动者 = pending[0].responder(回合末超上限的玩家, 见 turn.end_of_turn)。
-    官方顺序: 回合结束阶段(含弃牌决策)全部完成后才轮到下一位的回合开始,
-    故 count 归零 pop 后调用 turn.proceed 继续推进(不重复回合末内容)。
+    官方顺序(规则书 p6): 弃置多余的军事牌 -> 起义检定 -> 生产 -> 抓取
+    军事牌, 故 count 归零 pop 时识别 context 的 resume 标记
+    (turn.RESUME_END_OF_TURN_PRODUCTION), 先调 turn.end_of_turn_production
+    续跑回合末阶段 2(阶段 1 不重入), 再调 turn.proceed 推进——下一位
+    玩家的回合开始此刻才发生。无 resume 标记的 discard_military pending
+    (防御性口径: 正常流程仅 turn.end_of_turn 压入, 恒带标记)直接推进。
     """
     idx = acting_index(state)
     p = state.players[idx]
@@ -486,9 +490,13 @@ def _discard_military(
             state, pending=(replace(pending, context=context),)
             + state.pending[1:])
         return _update(state, idx, p)
+    resume = pending.context.get("resume")
     state = replace(state, pending=state.pending[1:])
     state = _update(state, idx, p)
-    # 弃牌结算完毕 -> 继续回合推进(下一位玩家的回合开始此刻才发生)
+    if resume == turn.RESUME_END_OF_TURN_PRODUCTION:
+        # 弃牌结算完毕 -> 续跑回合末阶段 2(起义/生产/抓牌/恢复, 恰一次)
+        state = turn.end_of_turn_production(state, db)
+    # 继续回合推进(下一位玩家的回合开始此刻才发生)
     return turn.proceed(state, db)
 
 

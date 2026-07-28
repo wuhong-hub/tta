@@ -288,46 +288,53 @@ def test_enter_age_four_clears_military_discard() -> None:
 
 
 def test_discard_excess_pending_flow() -> None:
-    """手牌 4 > 上限 2 -> pending count=2; 弃牌结算完毕才推进到下一位."""
+    """手牌 4 > 上限 2 -> pending count=2; 弃牌结算完毕才生产/推进."""
     db = _db()
     p0 = _player("P0", military_actions=0,
                  hand_military=("mi0", "mi1", "mi2", "mi3"))
-    state = _state(players=(p0, _player("P1")))
+    state = _state(players=(p0, _player("P1")),
+                   military_deck=("mi4", "mi5"))
     new = turn.advance(state, db)
-    # 官方顺序: 回合结束阶段(含弃牌决策)全部完成后, 才轮到下一位的回合
-    # 开始 -> 推进尚未发生: current_player/round/age/牌列/牌堆全部保持
+    # 官方顺序(规则书 p6): 弃置多余的军事牌 -> 起义检定 -> 生产 -> 抓取
+    # 军事牌。阶段 1 压入 pending 即停: 抓牌与推进均未发生,
+    # current_player/round/age/牌列/牌堆全部保持
     assert new.current_player == 0
     assert new.round == state.round
     assert new.age is state.age
     assert new.card_row == state.card_row
     assert new.civil_deck == state.civil_deck
+    assert new.military_deck == ("mi4", "mi5")  # 抓牌尚未发生
+    assert new.players[0].hand_military == ("mi0", "mi1", "mi2", "mi3")
     assert new.removed == ()
     assert new.phase is Phase.TURN_START
-    # pending 由刚结束回合的 P0 响应
+    # pending 由刚结束回合的 P0 响应, context 带续跑标记
     assert len(new.pending) == 1
     pending = new.pending[0]
     assert pending.kind == "discard_military"
     assert pending.responder == 0
-    assert pending.context == {"count": 2}
+    assert pending.context == {"count": 2, "resume": "end_of_turn_production"}
     # 法律: 仅 DiscardMilitary(强制弃牌, 响应期无 PassTurn 兜底)
     legal = legal_actions(db, new)
     assert legal
     assert all(isinstance(a, DiscardMilitary) for a in legal)
     assert PassTurn() not in legal
     assert {a.card_id for a in legal} == {"mi0", "mi1", "mi2", "mi3"}
-    # 弃 1 张: 入军事弃牌堆, count 递减, 仍不推进
+    # 弃 1 张: 入军事弃牌堆, count 递减, 仍不推进不抓牌
     new = apply(new, DiscardMilitary("mi1"), db)
     assert new.players[0].hand_military == ("mi0", "mi2", "mi3")
     assert new.military_discard == ("mi1",)
     assert new.current_player == 0
     assert new.card_row == state.card_row
+    assert new.military_deck == ("mi4", "mi5")
     assert len(new.pending) == 1
     assert new.pending[0].context["count"] == 1
-    # 再弃 1 张: 合规, pending pop -> 推进, 下一位回合开始此刻才发生
+    # 再弃 1 张: 合规, pending pop -> 续跑阶段 2(0 红点不抓牌) -> 推进,
+    # 下一位回合开始此刻才发生
     new = apply(new, DiscardMilitary("mi0"), db)
     assert new.pending == ()
     assert new.players[0].hand_military == ("mi2", "mi3")
     assert new.military_discard == ("mi1", "mi0")
+    assert new.military_deck == ("mi4", "mi5")
     assert new.current_player == 1
     assert new.phase is Phase.POLITICS
     # 下一位回合开始恰执行一次: 弃最左 3 张入 removed, 左移后补 3 张
@@ -336,6 +343,89 @@ def test_discard_excess_pending_flow() -> None:
     assert new.civil_deck == ("xi16", "xi17", "xi18", "xi19")
     # 政治阶段: 无军事手牌可打出时仅剩 Resign(时代 IV 外恒可退出, P2-T10)
     assert legal_actions(db, new) == [Resign(), SkipPolitics()]
+
+
+def test_discard_settles_before_military_draw() -> None:
+    """弃牌先于抓牌(官方顺序): 响应者手牌不含新抓牌, 只能弃原有手牌."""
+    db = _db()
+    # 上限 2, 手牌 3 -> 超 1; 剩余红点 2 -> 弃牌后抓 2 张
+    p0 = _player("P0", military_actions=2,
+                 hand_military=("mi0", "mi1", "mi2"))
+    state = _state(players=(p0, _player("P1")),
+                   military_deck=("mi3", "mi4", "mi5"))
+    new = turn.advance(state, db)
+    # 阶段 1 压 pending 即停: 抓牌未发生, 响应者手牌 = 原 3 张
+    assert len(new.pending) == 1
+    assert new.pending[0].context == {"count": 1,
+                                      "resume": "end_of_turn_production"}
+    assert new.players[0].hand_military == ("mi0", "mi1", "mi2")
+    assert new.military_deck == ("mi3", "mi4", "mi5")
+    # 响应期只能弃原有手牌(新抓的 mi3/mi4 不在候选)
+    legal = legal_actions(db, new)
+    assert {a.card_id for a in legal} == {"mi0", "mi1", "mi2"}
+    # 弃 1 张合规 -> 续跑阶段 2: 抓 2 张(剩余红点 2), 恢复行动点, 推进
+    new = apply(new, DiscardMilitary("mi1"), db)
+    assert new.pending == ()
+    assert new.players[0].hand_military == ("mi0", "mi2", "mi3", "mi4")
+    assert new.military_deck == ("mi5",)
+    assert new.military_discard == ("mi1",)
+    # 抓牌后手牌 4 > 上限 2: 官方口径不再检查(下次弃牌检查在该玩家
+    # 下个回合末), 无新 pending, 直接推进
+    assert new.current_player == 1
+    assert new.phase is Phase.POLITICS
+    assert new.players[0].military_actions == 2  # 已恢复为 civ 总值
+
+
+def test_resume_production_runs_exactly_once() -> None:
+    """续跑不重复阶段: 腐败/生产仅在弃牌结算后执行一次(弃牌时不执行)."""
+    db = _db()
+    # blue_bank=4 -> 腐败 4; bronze 5 蓝点付 4 余 1; 资源生产再取 1 蓝点
+    p0 = _player("P0", military_actions=0, blue_bank=4,
+                 hand_military=("mi0", "mi1", "mi2"),
+                 card_tokens={"bronze": 5},
+                 buildings={"mine": {"bronze": 1}})
+    state = _state(players=(p0, _player("P1")))
+    new = turn.advance(state, db)
+    # 阶段 1 压 pending 即停: 腐败/生产/恢复均尚未发生
+    assert len(new.pending) == 1
+    assert new.players[0].card_tokens == {"bronze": 5}
+    assert new.players[0].blue_bank == 4
+    assert new.players[0].civil_actions == 0
+    # 弃 1 张合规 -> 阶段 2 恰执行一次: 腐败付 4(蓝点回供给区 4+4=8),
+    # 资源生产 bronze 1 工人从供给区取 1(8-1=7), 行动点恢复, 推进
+    new = apply(new, DiscardMilitary("mi2"), db)
+    q = new.players[0]
+    assert new.pending == ()
+    assert q.card_tokens == {"bronze": 2}
+    assert q.blue_bank == 7
+    assert q.civil_actions == 4
+    assert q.military_actions == 2
+    assert new.current_player == 1
+
+
+def test_uprising_with_excess_discard() -> None:
+    """超限 + 起义组合: 先弃牌, 起义检定弃牌后执行, 生产跳过但抓牌照行."""
+    db = _db()
+    # yellow_bank=10 -> 幸福需求 4, 不满 4 > 空闲工人 1 -> 起义
+    p0 = _player("P0", military_actions=1, yellow_bank=10, science=3,
+                 hand_military=("mi0", "mi1", "mi2"))
+    state = _state(players=(p0, _player("P1")),
+                   military_deck=("mi3", "mi4"))
+    new = turn.advance(state, db)
+    # 弃牌 pending 先压入, 起义检定/抓牌尚未发生
+    assert len(new.pending) == 1
+    assert new.players[0].hand_military == ("mi0", "mi1", "mi2")
+    assert new.military_deck == ("mi3", "mi4")
+    # 弃 1 张合规 -> 阶段 2: 起义跳过生产(科技不变), 抓 1 张, 恢复行动点
+    new = apply(new, DiscardMilitary("mi0"), db)
+    q = new.players[0]
+    assert new.pending == ()
+    assert q.science == 3
+    assert q.hand_military == ("mi1", "mi2", "mi3")
+    assert new.military_deck == ("mi4",)
+    assert q.civil_actions == 4
+    assert q.military_actions == 2
+    assert new.current_player == 1
 
 
 def test_discard_military_not_in_hand_illegal() -> None:

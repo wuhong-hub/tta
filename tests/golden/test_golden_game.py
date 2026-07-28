@@ -17,6 +17,12 @@ GameState.public_tactics; CopyTactics 来源改为公共区; 换阵留区不再�
 removed)改变随机玩家合法动作空间与状态分布 -> steps 211 -> 213,
 终局 hash 变化(终局 public_tactics = ('heavy_cavalry', 'phalanx',
 'legion')), scores/winners/rounds 不变。
+
+P3-T3 回填说明(2026-07-28): 弃多余军事牌决策由"整个回合末流程之后"
+改为官方顺序"先于起义/生产/抓牌"(规则书 p6, end_of_turn 分阶段 +
+resume 续跑)——响应者弃牌候选不再含新抓牌, 轨迹重排 ->
+steps 213 -> 197, rounds 21 -> 20, 终局 hash 变化;
+scores/winners 不变。
 """
 
 from tta.agents.random_agent import RandomPlayer
@@ -29,10 +35,10 @@ from tta.orchestrator.runner import run_game
 
 GOLDEN_SCORES = (0, 0)
 GOLDEN_WINNERS = (0, 1)
-GOLDEN_ROUNDS = 21
-GOLDEN_STEPS = 213
+GOLDEN_ROUNDS = 20
+GOLDEN_STEPS = 197
 GOLDEN_FINAL_STATE_HASH = (
-    "3696158e29407b4ff0070da76e7f6760c0c1d9be215c5bcc83b3f19d7d20c346"
+    "9ec25a18dbc71f8a8aeca77d5e6b127e82cb7b5b00ca08e45180e20ed3cacb07"
 )
 
 

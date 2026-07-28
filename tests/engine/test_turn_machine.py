@@ -510,16 +510,18 @@ def test_age_four_discards_left_cards_but_never_refills() -> None:
 
 
 def test_discard_military_settles_before_proceeding() -> None:
-    """官方顺序: 回合末弃牌决策完成后, 才推进到下一位的回合开始."""
+    """官方顺序: 弃多余军事牌 -> 起义/生产/抓牌/恢复 -> 推进到下一位."""
     db = _db()
     # 上限 = 专制 2 红点, 手牌 3 -> 超 1 张
-    p0 = _player("P0", military_actions=0, hand_military=("m0", "m1", "m2"))
+    p0 = _player("P0", military_actions=0, hand_military=("m0", "m1", "m2"),
+                 buildings={"lab": {"philosophy": 1}})
     row = _full_row("xi")
     state = _state(round=2, age=Age.I, players=(p0, _player("P1")),
                    card_row=row, civil_deck=("xi13", "xi14", "xi15", "xi16"))
     new = turn.advance(state, db)
-    # 回合末已结算(P0 行动点恢复为专制 4 白), 但推进尚未发生
-    assert new.players[0].civil_actions == 4
+    # 阶段 1 压入弃牌 pending 即停: 生产/抓牌/恢复均尚未发生
+    assert new.players[0].civil_actions == 0
+    assert new.players[0].science == 0  # 哲学增速 +1 尚未计分
     assert new.current_player == 0
     assert new.round == 2
     assert new.card_row == row
@@ -531,9 +533,12 @@ def test_discard_military_settles_before_proceeding() -> None:
     # 响应期仅强制弃牌, 无 PassTurn 兜底
     assert legal_actions(db, new) == [
         DiscardMilitary("m0"), DiscardMilitary("m1"), DiscardMilitary("m2")]
-    # 弃至合规 -> proceed 继续推进, 下一位回合开始恰执行一次
+    # 弃至合规 -> 续跑阶段 2(生产/抓牌/恢复恰一次) -> proceed 推进,
+    # 下一位回合开始恰执行一次
     new = apply(new, DiscardMilitary("m0"), db)
     assert new.pending == ()
+    assert new.players[0].civil_actions == 4
+    assert new.players[0].science == 1  # 生产恰执行一次
     assert new.current_player == 1
     assert new.phase is Phase.POLITICS
     assert new.removed == ("xi0", "xi1", "xi2")
