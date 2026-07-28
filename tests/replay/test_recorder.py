@@ -86,4 +86,6 @@ def test_recorder_creates_parent_dirs(db, tmp_path) -> None:
         recorder.write_meta({"seed": 1})
     assert path.exists()
     meta = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert meta == {"type": "meta", "seed": 1}
+    # write_meta 自动补写 engine_version(P3-T9); 显式传入的键原样保留
+    assert meta["type"] == "meta" and meta["seed"] == 1
+    assert meta["engine_version"]

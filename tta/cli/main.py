@@ -1,7 +1,6 @@
 """命令行入口: tta selfplay / tta replay / tta play."""
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -9,7 +8,14 @@ from tta.agents.human_player import HumanPlayer
 from tta.agents.random_agent import RandomPlayer
 from tta.cards import build_card_db
 from tta.orchestrator.runner import run_game
-from tta.replay.recorder import ReplayRecorder
+from tta.replay.recorder import ReplayRecorder, current_engine_version
+from tta.replay.report import (
+    ReplayMismatchError,
+    parse_replay,
+    replay_to_state,
+    text_report,
+)
+from tta.ui.render import render_game
 
 
 def _cmd_selfplay(args: argparse.Namespace) -> int:
@@ -49,14 +55,47 @@ def _cmd_play(args: argparse.Namespace) -> int:
     return 0
 
 
+def _warn_version(meta: dict) -> None:
+    """棋谱引擎版本与当前不符时打印警告(stderr), 不阻止回放."""
+    recorded = meta.get("engine_version")
+    current = current_engine_version()
+    if recorded is None:
+        print("警告: 棋谱无引擎版本信息, 重放结果可能与录制时不一致",
+              file=sys.stderr)
+    elif recorded != current:
+        print(f"警告: 棋谱引擎版本 {recorded} 与当前 {current} 不符, "
+              "重放轨迹可能偏离记录", file=sys.stderr)
+
+
 def _cmd_replay(args: argparse.Namespace) -> int:
-    lines = [json.loads(x) for x in Path(args.file).read_text().splitlines()]
-    meta = next(x for x in lines if x["type"] == "meta")
-    result = next(x for x in lines if x["type"] == "result")
-    decisions = sum(1 for x in lines if x["type"] == "decision")
+    replay = parse_replay(Path(args.file))
+    _warn_version(replay.meta)
+    if args.report:
+        print(text_report(replay, db=build_card_db()))
+        return 0
+    if args.turn is not None:
+        db = build_card_db()
+        try:
+            state = replay_to_state(replay, db, args.turn)
+        except (ValueError, ReplayMismatchError) as exc:
+            print(f"跳转失败: {exc}", file=sys.stderr)
+            return 2
+        seat = (args.seat if args.seat is not None
+                else replay.effective[args.turn - 1].player)
+        print(f"第 {args.turn} 个有效决策前的盘面(P{seat} 视角):")
+        print(render_game(state, db, seat))
+        return 0
+    meta = replay.meta
+    result = replay.result
     print(f"seed: {meta['seed']}, players: {meta['players']}")
-    print(f"decisions: {decisions}, rounds: {result['rounds']}, "
-          f"scores: {result['scores']}, winners: {result['winners']}")
+    print(f"decisions: {len(replay.effective)} effective "
+          f"({len(replay.voided)} voided)")
+    if result is None:
+        print("result: (无终局记录)")
+    else:
+        print(f"rounds: {result['rounds']}, scores: {result['scores']}, "
+              f"winners: {result['winners']}"
+              f"{'' if result.get('completed', True) else ' (未完成)'}")
     return 0
 
 
@@ -72,8 +111,14 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--out", default="replays")
     sp.set_defaults(func=_cmd_selfplay)
 
-    rp = sub.add_parser("replay", help="查看棋谱摘要")
+    rp = sub.add_parser("replay", help="查看棋谱摘要/指定手跳转/文本战报")
     rp.add_argument("file")
+    rp.add_argument("--turn", type=int, default=None,
+                    help="重放到第 N 个有效决策前的盘面并渲染")
+    rp.add_argument("--seat", type=int, default=None,
+                    help="--turn 渲染视角(默认取该决策的行动者)")
+    rp.add_argument("--report", action="store_true",
+                    help="输出完整文本战报(回合摘要+终局+关键转折点)")
     rp.set_defaults(func=_cmd_replay)
 
     pp = sub.add_parser("play", help="人机对局(人类坐 --seat, 其余为随机 AI)")

@@ -1,11 +1,33 @@
 """JSONL 棋谱记录器."""
 
 import json
+import subprocess
 from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+import tta
 from tta.engine.actions import action_to_dict
+
+
+def current_engine_version() -> str:
+    """引擎版本标识: 包版本 + git short hash(仓库内可用时), 否则仅包版本.
+
+    写入棋谱 meta.engine_version; 回放时与当前值比对, 不符仅警告不阻止。
+    """
+    base = tta.__version__
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+            cwd=repo_root, check=False)
+    except OSError:
+        return base
+    commit = proc.stdout.strip()
+    if proc.returncode != 0 or not commit:
+        return base
+    return f"{base}+{commit}"
 
 
 class ReplayRecorder:
@@ -33,7 +55,8 @@ class ReplayRecorder:
         self._fh.flush()
 
     def write_meta(self, meta: dict[str, Any]) -> None:
-        """写入对局元信息(seed/模型/手册版本等)."""
+        """写入对局元信息(seed/模型/手册版本等); 自动补写 engine_version."""
+        meta = {"engine_version": current_engine_version(), **meta}
         self._write({"type": "meta", **meta})
 
     def write_decision(self, *, round_: int, player: int, state_hash: str,
