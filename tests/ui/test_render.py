@@ -177,6 +177,49 @@ def test_hidden_summary() -> None:
     assert hidden_summary(3) == "3张(隐藏)"
 
 
+def test_opponent_tactics_hidden_until_public(db: CardDB,
+                                              initial: GameState) -> None:
+    """未公开阵型: 对手视角卡名绝不入渲染, 只显示"未公开"."""
+    secret = "legion"
+    secret_name = db.get(secret).name
+    p1 = replace(initial.players[1], tactics=secret, tactics_public=False)
+    state = replace(initial, players=(initial.players[0], p1))
+    out = render_game(state, db, 0)
+    assert secret_name not in out
+    assert "阵型:未公开" in out
+    # 公开后卡名可见
+    revealed = replace(
+        state,
+        players=(state.players[0], replace(p1, tactics_public=True)),
+        public_tactics=(secret,),
+    )
+    out_public = render_game(revealed, db, 0)
+    assert "阵型:军团" in out_public
+    assert "阵型:未公开" not in out_public
+    # 本人视角不受影响(面板显示卡名)
+    own = render_game(state, db, 1)
+    assert f"阵型 {secret_name}" in own
+
+
+def test_render_public_tactics_line(db: CardDB, initial: GameState) -> None:
+    """公共阵型区: 公开信息, 空则 —, 非空列出卡名."""
+    out_empty = render_game(initial, db, 0)
+    assert "公共阵型: —" in out_empty
+    state = replace(initial, public_tactics=("phalanx", "classic_army"))
+    out = render_game(state, db, 0)
+    assert "公共阵型: 方阵、古典军队" in out
+
+
+def test_opponent_wonder_progress_shown(db: CardDB,
+                                        initial: GameState) -> None:
+    """对手在建奇迹进度为公开信息, 显示 卡名 x/y."""
+    p1 = replace(initial.players[1], wonder_progress=("taj_mahal", 1))
+    state = replace(initial, players=(initial.players[0], p1))
+    total = len(db.get("taj_mahal").wonder_stages)
+    out = render_game(state, db, 0)
+    assert f"奇迹进度:泰姬陵 1/{total}" in out
+
+
 # --- render_actions ------------------------------------------------------------
 
 

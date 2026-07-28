@@ -2,6 +2,7 @@
 
 隐藏信息过滤(官方规则信息集, seat 视角):
 - 对手军事手牌只显示数量(卡名绝不入渲染), 自己军事手牌卡名可见;
+- 对手未公开阵型(tactics_public=False, 打出当回合扣置)只显示"未公开";
 - 当前事件堆(暗置)/未来事件堆/军事牌堆只显示数量。
 
 本包仅依赖 tta.engine(渲染)与 tta.agents.base(菜单控制异常)公开接口;
@@ -168,24 +169,43 @@ def _events_line(state: GameState) -> str:
     )
 
 
+def _public_tactics_line(state: GameState, db: CardDB) -> str:
+    """公共阵型区(公开信息): 已公开阵型卡名, 空则 —."""
+    return "公共阵型: " + _join_names(db, state.public_tactics)
+
+
 def _join_names(db: CardDB, card_ids: tuple[str, ...]) -> str:
     return "、".join(_name(db, cid) for cid in card_ids) if card_ids else _EMPTY
 
 
 def _opponent_line(db: CardDB, state: GameState, index: int) -> str:
-    """对手摘要(单行): 公开数值 + 隐藏手牌数量(军事手牌不显示卡名)."""
+    """对手摘要(单行): 公开数值 + 隐藏手牌数量(军事手牌不显示卡名).
+
+    阵型卡名仅 tactics_public(实体卡已入公共阵型区)才显示;
+    打出当回合扣置未公开时只显示"未公开"。在建奇迹进度为公开信息。
+    """
     p = state.players[index]
     civ = civ_values(db, p, state.players, index)
     leader = _name(db, p.leader) if p.leader else _EMPTY
     wonders = _join_names(db, p.wonders)
-    tactics = _name(db, p.tactics) if p.tactics else _EMPTY
+    if p.tactics is None:
+        tactics = _EMPTY
+    elif p.tactics_public:
+        tactics = _name(db, p.tactics)
+    else:
+        tactics = "未公开"
+    wonder_progress = ""
+    if p.wonder_progress is not None:
+        card_id, done = p.wonder_progress
+        total = len(db.get(card_id).wonder_stages)
+        wonder_progress = f" 奇迹进度:{_name(db, card_id)} {done}/{total}"
     resigned = " [已退出]" if p.resigned else ""
     return (
         f"P{index}: 文化{p.culture} 科技{p.science} 军力{civ.strength} "
         f"笑脸{civ.happiness}/需{happiness_required(p.yellow_bank)} | "
         f"工人{workers_total(p)}(池{p.worker_pool}) "
         f"黄点{p.yellow_bank} 蓝点{p.blue_bank} | "
-        f"领袖:{leader} 奇迹:{wonders} 阵型:{tactics} "
+        f"领袖:{leader} 奇迹:{wonders} 阵型:{tactics}{wonder_progress} "
         f"殖民地:{len(p.colonies)} | "
         f"内政手牌{len(p.hand_civil)} "
         f"军事手牌{hidden_summary(len(p.hand_military))}{resigned}"
@@ -312,6 +332,7 @@ def render_game(state: GameState, db: CardDB, seat: int) -> str:
         lines.append(_pending_line(state))
     lines.append(_card_row_line(state, db))
     lines.append(_events_line(state))
+    lines.append(_public_tactics_line(state, db))
     opponents = [i for i in range(len(state.players)) if i != seat]
     if opponents:
         lines.append("--- 对手 ---")
