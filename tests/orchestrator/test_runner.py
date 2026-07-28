@@ -4,9 +4,18 @@ import json
 
 import pytest
 
+import tta.orchestrator.runner as runner_module
 from tta.agents.random_agent import RandomPlayer
 from tta.cards import build_card_db
-from tta.engine.actions import DevelopTech, IllegalActionError
+from tta.engine import politics
+from tta.engine.actions import (
+    ColonizeSacrifice,
+    DevelopTech,
+    IllegalActionError,
+    Resign,
+)
+from tta.engine.enums import Age, Phase
+from tta.engine.state import ROW_SLOTS, GameState, PendingEffect, PlayerState
 from tta.orchestrator.runner import GameResult, run_game
 from tta.replay.recorder import ReplayRecorder
 
@@ -53,6 +62,84 @@ class _CheatPlayer:
 def test_illegal_action_raises(db) -> None:
     with pytest.raises(IllegalActionError):
         run_game(db, [_CheatPlayer(), RandomPlayer(seed=1)], seed=1)
+
+
+# --- 自校验复合动作闸口(P3-T1) -----------------------------------------------
+
+
+_DEVELOPED = (
+    "agriculture", "agriculture", "bronze", "bronze",
+    "philosophy", "religion", "warriors",
+)
+
+
+def _sacrifice_game_state() -> GameState:
+    """2 人局: P0 为殖民牺牲响应者(5 武士, 出价 4), P1 政治阶段的待决状态."""
+    p0 = PlayerState(
+        name="P0", developed=_DEVELOPED,
+        buildings={
+            "farm": {"agriculture": 2}, "mine": {"bronze": 2},
+            "lab": {"philosophy": 1}, "infantry": {"warriors": 5},
+        })
+    p1 = PlayerState(
+        name="P1", developed=_DEVELOPED,
+        buildings={
+            "farm": {"agriculture": 2}, "mine": {"bronze": 2},
+            "lab": {"philosophy": 1}, "infantry": {"warriors": 1},
+        })
+    pending = PendingEffect(
+        politics.KIND_COLONIZE_SACRIFICE, 0, responder=0,
+        context={"territory": "developed_territory_i", "bid": 4, "bonus": 0})
+    return GameState(
+        round=2, age=Age.A, current_player=1,
+        card_row=(None,) * ROW_SLOTS, civil_deck=(), future_decks={},
+        discard=(), removed=(), players=(p0, p1), rng_state=42,
+        phase=Phase.POLITICS, pending=(pending,))
+
+
+class _SubsetSacrificePlayer:
+    """提交 ColonizeSacrifice 精确子集(4/5 武士, 不在 legal 中)的玩家."""
+
+    def choose(self, state, legal, db):  # noqa: ANN001, ANN201
+        return ColonizeSacrifice(("warriors",) * 4)
+
+
+class _WeakSacrificePlayer:
+    """提交军力不足的非法 ColonizeSacrifice 子集的玩家."""
+
+    def choose(self, state, legal, db):  # noqa: ANN001, ANN201
+        return ColonizeSacrifice(("warriors",))  # 军力 1 < 出价 4
+
+
+class _ResignPlayer:
+    """政治阶段直接体面退出(2 人局 -> 对方立即判胜)的玩家."""
+
+    def choose(self, state, legal, db):  # noqa: ANN001, ANN201
+        return Resign()
+
+
+def _patch_new_game(monkeypatch) -> None:  # noqa: ANN001, ANN202
+    monkeypatch.setattr(
+        runner_module, "new_game",
+        lambda db, num_players, seed: _sacrifice_game_state())
+
+
+def test_self_validating_subset_action_passes_gate(db, monkeypatch) -> None:
+    # 精确子集(4 武士, 军力 4 = 出价 4)不在 legal(legal 仅 <=3 张组合 +
+    # 全选锚点): 旧闸口必拒; 自校验动作放行后由 apply 独立校验通过
+    _patch_new_game(monkeypatch)
+    result = run_game(
+        db, [_SubsetSacrificePlayer(), _ResignPlayer()], seed=1)
+    # 第 1 步 P0 牺牲获殖民地; 第 2 步 P1 退出 -> P0 直接判胜
+    assert result.steps == 2
+    assert result.winners == (0,)
+
+
+def test_invalid_self_validating_action_rejected_by_apply(db, monkeypatch) -> None:
+    # 自校验动作过闸口不代表合法: 非法子集由 apply 抛 IllegalActionError
+    _patch_new_game(monkeypatch)
+    with pytest.raises(IllegalActionError):
+        run_game(db, [_WeakSacrificePlayer(), _ResignPlayer()], seed=1)
 
 
 def test_recorder_writes_meta_decision_result(db, tmp_path) -> None:

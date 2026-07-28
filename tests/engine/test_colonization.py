@@ -35,7 +35,7 @@ from tta.engine.actions import (
 from tta.engine.apply import apply
 from tta.engine.civ import civ_values
 from tta.engine.enums import Age, Phase
-from tta.engine.legal import legal_actions
+from tta.engine.legal import is_self_validating, legal_actions
 from tta.engine.state import (
     ROW_SLOTS,
     GameState,
@@ -389,6 +389,74 @@ def test_canonical_all_units_sacrifice_in_legal() -> None:
     p0 = _player("P0", buildings=buildings)
     state = _sacrifice_state(player=p0, pending_kwargs={"bid": 2})
     assert ColonizeSacrifice(("warriors", "warriors")) in legal_actions(db, state)
+
+
+def test_colonize_sacrifice_is_self_validating() -> None:
+    # 自校验协议: 仅 ColonizeSacrifice 由 apply 独立校验, runner 闸口放行
+    assert is_self_validating(ColonizeSacrifice(("warriors",)))
+    assert not is_self_validating(ColonizePass())
+    assert not is_self_validating(ColonizePlayBonus("defense_colonization_i"))
+
+
+def test_sacrifice_subset_enumeration_two_card_combos() -> None:
+    # legal 除全选锚点外, 枚举 <=3 张单位的全部可履约组合(供随机/LLM 选用)
+    db = build_card_db()
+    buildings = {k: dict(v) for k, v in _INITIAL_BUILDINGS.items()}
+    buildings["infantry"] = {"swordsmen": 1, "warriors": 2}
+    p0 = _player("P0", buildings=buildings)
+    state = _sacrifice_state(player=p0, pending_kwargs={"bid": 2})
+    sacrifices = [a for a in legal_actions(db, state)
+                  if isinstance(a, ColonizeSacrifice)]
+    # 剑士(2) / 2 武士(1+1) / 剑士+武士 / 全选(锚点) 均 >= 出价 2
+    assert ColonizeSacrifice(("swordsmen",)) in sacrifices
+    assert ColonizeSacrifice(("warriors", "warriors")) in sacrifices
+    assert ColonizeSacrifice(("swordsmen", "warriors")) in sacrifices
+    assert ColonizeSacrifice(
+        ("swordsmen", "warriors", "warriors")) in sacrifices
+    # 1 武士(1) < 2 -> 不枚举
+    assert ColonizeSacrifice(("warriors",)) not in sacrifices
+    # 枚举出的精确子集可直接 apply(剩余剑士保留)
+    new = apply(state, ColonizeSacrifice(("warriors", "warriors")), db)
+    assert new.players[0].colonies == ("developed_territory_i",)
+    assert new.players[0].buildings["infantry"] == {"swordsmen": 1}
+
+
+def test_sacrifice_subset_enumeration_fallback_when_too_many_combos() -> None:
+    # 去重组合数 > 20 时只给全选锚点, 防动作列表爆炸
+    db = build_card_db()
+    buildings = {k: dict(v) for k, v in _INITIAL_BUILDINGS.items()}
+    buildings["infantry"] = {"swordsmen": 1, "warriors": 1}
+    buildings["cavalry"] = {"cavalrymen": 1, "knights": 1}
+    buildings["artillery"] = {"cannon": 1}
+    p0 = _player("P0", buildings=buildings)
+    # 出价 1: 大量子集可履约, 但 C(5,1)+C(5,2)+C(5,3) = 25 > 20 -> 仅锚点
+    state = _sacrifice_state(player=p0, pending_kwargs={"bid": 1})
+    sacrifices = [a for a in legal_actions(db, state)
+                  if isinstance(a, ColonizeSacrifice)]
+    assert sacrifices == [ColonizeSacrifice(
+        ("cannon", "cavalrymen", "knights", "swordsmen", "warriors"))]
+
+
+def test_sacrifice_actor_is_pending_responder() -> None:
+    # 行动者恒为 pending responder(动作无座位字段, 无法冒名): responder=1
+    # 时牺牲的是 P1 的单位, P0 的同名/他卡不受影响; 非己单位不可牺牲
+    db = build_card_db()
+    buildings0 = {k: dict(v) for k, v in _INITIAL_BUILDINGS.items()}
+    buildings0["infantry"] = {"swordsmen": 1}
+    p0 = _player("P0", buildings=buildings0)
+    p1 = _player("P1")  # 1 武士
+    state = _state(
+        players=(p0, p1),
+        pending=(_sacrifice_pending(bid=1, responder=1),))
+    # legal 面向 P1: 锚点为 P1 的武士
+    assert ColonizeSacrifice(("warriors",)) in legal_actions(db, state)
+    # P0 的剑士不属于响应者 P1 -> 非法
+    with pytest.raises(IllegalActionError):
+        apply(state, ColonizeSacrifice(("swordsmen",)), db)
+    new = apply(state, ColonizeSacrifice(("warriors",)), db)
+    assert new.players[1].colonies == ("developed_territory_i",)
+    assert new.players[1].buildings["infantry"] == {}
+    assert new.players[0].buildings["infantry"] == {"swordsmen": 1}
 
 
 def test_colonization_modifier_counts_toward_fulfillment() -> None:

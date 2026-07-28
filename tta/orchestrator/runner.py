@@ -7,7 +7,7 @@ from tta.agents.base import Player
 from tta.engine.actions import IllegalActionError
 from tta.engine.apply import apply
 from tta.engine.constants import MAX_STEPS
-from tta.engine.legal import legal_actions
+from tta.engine.legal import is_self_validating, legal_actions
 from tta.engine.model import CardDB
 from tta.engine.setup import new_game
 from tta.engine.state import acting_index, state_hash
@@ -48,7 +48,10 @@ def run_game(db: CardDB, players: Sequence[Player], seed: int,
         seat = acting_index(state)
         actor = players[seat]
         action = actor.choose(state, legal, db)
-        if action not in legal:
+        # 合法性闸口: 常规动作须在 legal 中; 自校验动作(组合枚举爆炸无法
+        # 完全入 legal, 如 ColonizeSacrifice 精确子集)由 apply 独立保证
+        # 合法性, 闸口放行(非法仍由 apply 抛 IllegalActionError)
+        if action not in legal and not is_self_validating(action):
             raise IllegalActionError(
                 f"agent {type(actor).__name__} returned illegal action {action!r}")
         if recorder:

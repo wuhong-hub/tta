@@ -408,9 +408,12 @@ def colonize_sacrifice(
 ) -> GameState:
     """ColonizeSacrifice 结算: 独立校验(组合枚举爆炸, 非 legal 成员判定).
 
-    校验: 存在 colonize_sacrifice pending; 至少 1 个单位; 均为有工人的
-    军事单位卡(重复数不超过工人数); 所选单位军力(按当前阵型组军) + 殖民
-    修正 + 已出奖励 >= 出价。成功后每单位 1 工人回黄点银行, 获得殖民地。
+    校验: 存在 colonize_sacrifice pending; 至少 1 个单位; 卡 id 存在
+    (非法抛 IllegalActionError 而非 KeyError); 均为有工人的军事单位卡
+    (重复数不超过工人数, 即单位属于该玩家); 所选单位军力(按当前阵型组军)
+    + 殖民修正 + 已出奖励 >= 出价。行动者 = acting_index = pending
+    responder(动作无座位字段, 无法冒名他玩家; 牺牲的是响应者自己的
+    单位)。成功后每单位 1 工人回黄点银行, 获得殖民地。
     """
     if not state.pending or state.pending[0].kind != KIND_COLONIZE_SACRIFICE:
         msg = f"当前无殖民牺牲 pending, 无法执行 {action!r}"

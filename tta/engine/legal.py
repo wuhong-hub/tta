@@ -30,7 +30,15 @@ PlayActionCard。
 (官方规则: 每回合一次, 1 红点抵 1 白点, 仅 TakeCard/DevelopTech/Build/
 Upgrade 四处挂钩, 见 effects.flexible_actions); frugality 等行动卡的
 额外打出条件经 effects.PLAY_CONDITIONS 预判。
+
+自校验动作(P3-T1): SELF_VALIDATING_ACTIONS(当前仅 ColonizeSacrifice)
+中的动作类型组合枚举爆炸无法完全入 legal, 由 apply 独立校验合法性;
+runner 闸口对 `action in legal or is_self_validating(action)` 放行。
+legal 为殖民牺牲枚举 <=3 张单位的全部可履约组合(去重组合数 >20 时仅
+全选锚点), 供随机/LLM 玩家直接选用。
 """
+
+from itertools import combinations
 
 from tta.engine import effects, events, military, politics
 from tta.engine.actions import (
@@ -86,6 +94,15 @@ _DECLINABLE_PENDING_KINDS: frozenset[str] = (
 
 UNIT_BUILD_DISCOUNT_KEY = effects.UNIT_BUILD_DISCOUNT_KEY
 """turn_discounts 中兵种建造折扣的键(回合修饰类行动卡写入)."""
+
+SELF_VALIDATING_ACTIONS: frozenset[type] = frozenset({ColonizeSacrifice})
+"""自校验动作类型: 组合枚举爆炸无法完全入 legal, 由 apply 独立校验合法性
+(见 politics.colonize_sacrifice); runner 合法性闸口对其放行。"""
+
+
+def is_self_validating(action: Action) -> bool:
+    """动作类型是否由 apply 独立校验合法性(当前仅 ColonizeSacrifice)."""
+    return type(action) in SELF_VALIDATING_ACTIONS
 
 
 def turn_discount_for(p: PlayerState, category: CardCategory) -> int:
@@ -494,14 +511,23 @@ def _colonize_bid_actions(
     return actions
 
 
+_SACRIFICE_SUBSET_MAX_UNITS = 3
+"""legal 枚举殖民牺牲子集的最大单位数(<=3 张的组合全枚举)。"""
+
+_SACRIFICE_SUBSET_MAX_COMBOS = 20
+"""子集去重组合数上限: 超出时只给全选锚点, 防动作列表爆炸。"""
+
+
 def _colonize_sacrifice_actions(
     db: CardDB, p: PlayerState, pending: PendingEffect,
 ) -> list[Action]:
-    """胜者牺牲结算: 逐张 ColonizePlayBonus + "全选"锚点 ColonizeSacrifice.
+    """胜者牺牲结算: 逐张 ColonizePlayBonus + 常用子集枚举 + 全选锚点.
 
-    牺牲元组组合枚举爆炸, legal 仅提供"牺牲全部单位"锚点(出价 <= 上限
-    保证其恒可履约, 配合奖励牌); 精确子集由 apply 独立校验(见
-    politics.colonize_sacrifice), LLM 玩家可构造任意元组动作。
+    牺牲元组组合枚举爆炸, legal 除"牺牲全部单位"锚点(出价 <= 上限保证其
+    恒可履约, 配合奖励牌)外, 枚举 <=3 张单位的全部可履约组合(去重后组合
+    数 >20 时只给锚点, 防动作列表爆炸), 供随机/LLM 玩家直接选用; 其余精确
+    子集由 apply 独立校验(见 politics.colonize_sacrifice), LLM 玩家可构造
+    任意元组动作。
     """
     actions: list[Action] = [
         ColonizePlayBonus(card_id)
@@ -518,13 +544,25 @@ def _colonize_sacrifice_actions(
     if all_units:
         bid = int(pending.context["bid"])
         bonus = int(pending.context.get("bonus", 0))
-        strength = (
-            military.units_strength(db, p, all_units)
-            + civ_values(db, p).colonization
-            + bonus
-        )
-        if strength >= bid:
-            actions.append(ColonizeSacrifice(all_units))
+        fixed = civ_values(db, p).colonization + bonus
+
+        def _fulfills(units: tuple[str, ...]) -> bool:
+            return military.units_strength(db, p, units) + fixed >= bid
+
+        combos = sorted({
+            combo
+            for size in range(
+                1, min(_SACRIFICE_SUBSET_MAX_UNITS, len(all_units)) + 1)
+            for combo in combinations(all_units, size)
+        })
+        if len(combos) <= _SACRIFICE_SUBSET_MAX_COMBOS:
+            actions.extend(
+                ColonizeSacrifice(combo) for combo in combos
+                if _fulfills(combo))
+        if _fulfills(all_units):
+            anchor = ColonizeSacrifice(all_units)
+            if anchor not in actions:
+                actions.append(anchor)
     return actions
 
 
