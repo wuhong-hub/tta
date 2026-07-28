@@ -825,6 +825,50 @@ def test_bach_upgrade_requires_bach_and_target_slot(db: CardDB) -> None:
     assert Upgrade("religion", "drama") not in legal_actions(db, _state(p2))
 
 
+def test_bach_upgrade_urban_limit(db: CardDB) -> None:
+    """j_s_bach 特殊升级新增剧院建筑时受城市建筑上限约束(P3-T6 审查漏洞).
+
+    despotism(urban_limit=2)下已有 2 座有工人剧院(drama/opera):
+    organized_religion(时代 II 寺庙) -> movies(时代 III 剧院, 0 工人)会新增
+    第 3 座剧院建筑, 不合法; 换 republic(urban_limit=3)则合法。
+    """
+    p = _player(leader="j_s_bach",
+                developed=("organized_religion", "drama", "opera", "movies",
+                           "bronze"),
+                buildings={"temple": {"organized_religion": 1},
+                           "theater": {"drama": 1, "opera": 1}},
+                card_tokens={"bronze": 10}, blue_bank=16)
+    assert Upgrade("organized_religion", "movies") not in legal_actions(
+        db, _state(p))
+    # 上限未达(republic urban_limit=3): 同一升级合法
+    p2 = _player(leader="j_s_bach", government="republic",
+                 developed=("organized_religion", "drama", "opera", "movies",
+                            "bronze"),
+                 buildings={"temple": {"organized_religion": 1},
+                            "theater": {"drama": 1, "opera": 1}},
+                 card_tokens={"bronze": 10}, blue_bank=16)
+    assert Upgrade("organized_religion", "movies") in legal_actions(
+        db, _state(p2))
+
+
+def test_bach_upgrade_urban_limit_existing_theater(db: CardDB) -> None:
+    """bach 升级目标剧院卡已有工人(不新增建筑)时不受城市建筑上限影响.
+
+    despotism(urban_limit=2)下已有 2 座有工人剧院(drama/opera), drama 研发
+    2 张仅 1 个工人: religion(时代 A 寺庙) -> drama(+1 级)是工人移入已有
+    剧院建筑, 建筑数不变, 仍合法。
+    """
+    p = _player(leader="j_s_bach",
+                developed=("religion", "drama", "drama", "opera", "bronze"),
+                buildings={"temple": {"religion": 1},
+                           "theater": {"drama": 1, "opera": 1}},
+                card_tokens={"bronze": 10}, blue_bank=16)
+    state = _state(p)
+    assert Upgrade("religion", "drama") in legal_actions(db, state)
+    new = apply(state, Upgrade("religion", "drama"), db)
+    assert new.players[0].buildings["theater"] == {"drama": 2, "opera": 1}
+
+
 # --- masonry 系列: 奇迹多阶段 + 城市建筑折扣(P3-T6) -------------------------------
 
 

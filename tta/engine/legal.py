@@ -381,16 +381,21 @@ def _bach_upgrade_actions(db: CardDB, p: PlayerState) -> list[Action]:
 
     以 Upgrade 动作特例枚举(apply 按 is_bach_upgrade 识别并记次于
     turn_discounts); 资源费按升级差价规则(含 masonry 双边折后差价)。
+    目标剧院卡 0 工人(新增建筑)时受城市建筑上限(urban_limit)约束。
     """
     if not effects.bach_upgrade_available(p):
         return []
     if p.civil_actions + effects.flexible_actions(db, p) < 1:
         return []
     actions: list[Action] = []
+    civ = civ_values(db, p)
     # trade_routes A 侧: 资源费可用 1 食物抵 1 资源(同 _upgrade_actions)
     resources = resource_total(db, p) + effects.trade_routes_substitution(
         db, p, "resource")
     developed = list(p.developed)
+    theater_slots = p.buildings.get(CardCategory.THEATER.value, {})
+    # 剧院类别已有建筑数(每张有工人的卡 = 一座建筑, 同 _build_actions 口径)
+    theater_built = sum(1 for n in theater_slots.values() if n > 0)
     for from_id in dict.fromkeys(developed):
         from_card = db.get(from_id)
         if from_card.category not in URBAN_CATEGORIES:
@@ -404,8 +409,12 @@ def _bach_upgrade_actions(db: CardDB, p: PlayerState) -> list[Action]:
             to_card = db.get(to_id)
             if not effects.bach_upgrade_target_ok(from_card, to_card):
                 continue
-            theater_slots = p.buildings.get(CardCategory.THEATER.value, {})
             if theater_slots.get(to_id, 0) >= developed.count(to_id):
+                continue
+            # 目标剧院卡当前 0 工人 = 新增一座剧院建筑, 受城市建筑上限约束
+            # (目标已有工人时建筑数不变, 不受限)
+            if (theater_slots.get(to_id, 0) == 0
+                    and theater_built >= civ.urban_limit):
                 continue
             diff = max(
                 0,
