@@ -18,7 +18,8 @@ legal_actions(db, state) 枚举行动者的全部合法动作:
   PassTurn 恒在末尾(PassTurn 仅在 ACTION 相位合法)。
 
 阵型动作(规则书 p6): PlayTactics 打出手牌阵型 1 红点; CopyTactics 复制
-任一对手已公开阵型 2 红点; 两者合计每回合限 1(tactics_this_turn)。
+公共阵型区(public_tactics)中的阵型 2 红点; 两者合计每回合限 1
+(tactics_this_turn)。
 
 pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0);
 breakthrough 的 develop_tech 子行动为 0 行动点全价研发手牌科技。
@@ -603,8 +604,8 @@ def _tactics_actions(db: CardDB, state: GameState) -> list[Action]:
     """阵型动作枚举(规则书 p6: 打出 1 红点 / 复制 2 红点, 合计每回合限 1).
 
     - PlayTactics: 手牌中的 TACTICS 卡, 需 1 军事行动;
-    - CopyTactics: 任一对手已公开(tactics_public)的阵型, 需 2 军事行动,
-      不消耗手牌; 已是自己当前阵型的卡不再枚举(无意义动作)。
+    - CopyTactics: 公共阵型区(public_tactics)中的卡, 需 2 军事行动,
+      不消耗手牌, 卡留公共区; 已是自己当前阵型的卡不再枚举(无意义动作)。
     """
     idx = state.current_player
     p = state.players[idx]
@@ -616,14 +617,9 @@ def _tactics_actions(db: CardDB, state: GameState) -> list[Action]:
             if db.get(card_id).category is CardCategory.TACTICS:
                 actions.append(PlayTactics(card_id))
     if p.military_actions >= 2:
-        copied: dict[str, None] = {}
-        for i, other in enumerate(state.players):
-            if i == idx or other.tactics is None or not other.tactics_public:
-                continue
-            if other.tactics == p.tactics:
-                continue
-            copied[other.tactics] = None
-        actions.extend(CopyTactics(card_id) for card_id in copied)
+        for card_id in dict.fromkeys(state.public_tactics):
+            if card_id != p.tactics:
+                actions.append(CopyTactics(card_id))
     return actions
 
 

@@ -1429,7 +1429,10 @@ def resign(db: CardDB, state: GameState) -> GameState:
     if p.wonder_progress is not None:
         removed.append(p.wonder_progress[0])
     removed.extend(p.colonies)
-    if p.tactics is not None and not p.tactics_copied:
+    # 未公开的实体阵型卡随文明移除; 已公开的留在公共阵型区(public_tactics,
+    # 公共区记账, 他人仍可复制), 复制引用无实体卡不入
+    if (p.tactics is not None and not p.tactics_copied
+            and not p.tactics_public):
         removed.append(p.tactics)
     removed.extend(card_id for card_id, _ in p.declared_wars)
     # 与退出者有关的条约牌入 removed(下方从双方 pacts 移除)

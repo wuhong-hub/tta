@@ -32,7 +32,8 @@ advance(state, db) 流程:
    -> 结算战争(规则书 p3 回合流程: 补充卡牌列 -> 结算战争 -> 公开
    专属阵型; 当前玩家 declared_wars 逐张结算, 见
    politics.resolve_declared_wars)-> 强制公开专属阵型(规则书 p3:
-   tactics 非 None 且未公开 -> tactics_public=True):
+   tactics 非 None 且未公开 -> tactics_public=True, 实体卡入公共阵型区
+   public_tactics, 同名覆盖/复制引用口径见 _reveal_tactics):
    - 时代 A 于第一次补牌时结束: 先用 A 堆补空位, 余牌入 removed, 启用
      I 堆继续补(官方规则: 时代 A 结束 nothing else happens -> 无过期,
      也无每人 -2 黄点);
@@ -222,12 +223,24 @@ def _production(db: CardDB, p: PlayerState, values: civ.CivValues) -> PlayerStat
 def _reveal_tactics(state: GameState) -> GameState:
     """回合开始强制公开专属阵型(规则书 p3: 有阵型牌必须在此时将其公开).
 
-    公开后其他玩家方可复制(CopyTactics); 打出/复制的当回合不公开。
+    公开即实体卡入公共阵型区(public_tactics), 之后其他玩家方可复制
+    (CopyTactics 合法来源 = 公共区); 打出/复制的当回合不公开。
+    同名牌处理: 公共区已有同名牌时, 规则书允许覆盖或从游戏中移除——
+    同 id 下两者状态等价, 引擎固定"公共区保留一张, 重复实体卡入 removed"
+    (真实牌库阵型有 2 份, 如 phalanx)。复制引用(tactics_copied)无实体卡,
+    公开时不动公共区(不追加、不产生幻影 removed)。
     """
     idx = state.current_player
     p = state.players[idx]
     if p.tactics is None or p.tactics_public:
         return state
+    if not p.tactics_copied:
+        if p.tactics in state.public_tactics:
+            # 同名牌覆盖: 重复实体卡从游戏中移除, 公共区保留一张
+            state = replace(state, removed=state.removed + (p.tactics,))
+        else:
+            state = replace(
+                state, public_tactics=state.public_tactics + (p.tactics,))
     return replace_player(state, idx, replace(p, tactics_public=True))
 
 

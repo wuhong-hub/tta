@@ -497,18 +497,19 @@ def _set_tactics(
 ) -> GameState:
     """打出/复制阵型公共结算: 扣红点, 旧阵型离场, 置新专属阵型.
 
-    旧阵型为实体卡(tactics_copied=False, 由 PlayTactics 入场)时入 removed
-    而非军事弃牌堆(规则书 p3: 公开后的阵型被替换留公共阵型区, 重复卡从
-    游戏中移除, 永不回流军事牌堆; SIMPLIFICATION: 不单独建模公共阵型区,
-    未公开即被替换的实体卡同样入 removed; 复制他人阵型经 CopyTactics 引用
-    对手在场卡实现, 不受影响)。旧阵型为复制引用时仅丢弃引用(无实体卡,
-    不产生幻影卡)。新阵型 tactics_public=False(打出的当回合不公开),
-    回合开始阶段强制公开(规则书 p3, 见 turn._reveal_tactics);
-    tactics_this_turn=True(打出与复制合计每回合限 1, 规则书 p6)。
+    旧阵型处置(规则书 p3 + P3-T2 公共阵型区口径): 已公开(实体卡已在
+    public_tactics)或为复制引用(卡本就在公共区)时留在公共区不动——他人
+    仍可复制, 玩家只是不再激活它; 废弃 T13"旧阵型入 removed"过渡口径。
+    未公开的实体旧阵型被替换入 removed(防御性口径: 正常流程不可达——
+    打出/复制每回合限 1 且回合开始强制公开, 不可能同回合替换)。新阵型
+    tactics_public=False(打出的当回合不公开), 回合开始阶段强制公开入区
+    (规则书 p3, 见 turn._reveal_tactics); tactics_this_turn=True(打出与
+    复制合计每回合限 1, 规则书 p6)。
     """
     p = state.players[idx]
     p = replace(p, military_actions=p.military_actions - cost)
-    if p.tactics is not None and not p.tactics_copied:
+    if (p.tactics is not None and not p.tactics_copied
+            and not p.tactics_public):
         state = replace(state, removed=state.removed + (p.tactics,))
     p = replace(p, tactics=card_id, tactics_public=False,
                 tactics_this_turn=True, tactics_copied=copied)
@@ -526,7 +527,7 @@ def _play_tactics(db: CardDB, state: GameState, action: PlayTactics) -> GameStat
 
 
 def _copy_tactics(db: CardDB, state: GameState, action: CopyTactics) -> GameState:
-    """复制对手已公开的阵型: 2 红点, 不消耗手牌, 成为自己的专属阵型(引用)."""
+    """复制公共阵型区中的阵型: 2 红点, 不消耗手牌, 卡留公共区(激活引用)."""
     idx = acting_index(state)
     return _set_tactics(state, idx, action.card_id, 2, copied=True)
 

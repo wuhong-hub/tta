@@ -3,7 +3,9 @@
 覆盖: 基础军力、完整组加成、残缺组无加成、多组、旧式减半、贪心填充
 确定性、空军翻倍与"空军不能单独成军"、PlayTactics/CopyTactics 合法性与
 结算、每回合限 1、回合开始强制公开、tactics_this_turn 行动点恢复时清零、
-亚历山大/拿破仑静态加成叠加、civ_values 军力口径。
+亚历山大/拿破仑静态加成叠加、civ_values 军力口径、公共阵型区(P3-T2:
+公开入区、复制来源为公共区、换阵留区、同名覆盖、复制引用公开无幻影、
+序列化往返)。
 """
 
 import pytest
@@ -22,7 +24,13 @@ from tta.engine.enums import Age, CardCategory, DeckType, Phase
 from tta.engine.legal import legal_actions
 from tta.engine.military import army_strength
 from tta.engine.model import CardDB, CardDefinition, GovernmentStats
-from tta.engine.state import ROW_SLOTS, GameState, PlayerState
+from tta.engine.state import (
+    ROW_SLOTS,
+    GameState,
+    PlayerState,
+    from_dict,
+    to_dict,
+)
 
 
 def _card(card_id: str, category: CardCategory, age: Age = Age.A,
@@ -278,25 +286,39 @@ def test_play_tactics_requires_military_action() -> None:
 
 def test_play_tactics_illegal_when_used_this_turn() -> None:
     """打出与复制合计每回合限 1 次."""
-    state = _state(players=(
-        _player("P0", military_actions=3, tactics_this_turn=True,
-                hand_military=("fighting_band",)),
-        _player("P1", tactics="phalanx", tactics_public=True)))
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=3, tactics_this_turn=True,
+                    hand_military=("fighting_band",)),
+            _player("P1", tactics="phalanx", tactics_public=True)))
     actions = legal_actions(_db(), state)
     assert PlayTactics("fighting_band") not in actions
     assert CopyTactics("phalanx") not in actions
 
 
 def test_copy_tactics_legal() -> None:
-    """复制对手已公开阵型: 2 红点, 不消耗手牌."""
-    state = _state(players=(
-        _player("P0", military_actions=2),
-        _player("P1", tactics="phalanx", tactics_public=True)))
+    """复制公共阵型区中的阵型: 2 红点, 不消耗手牌."""
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=2),
+            _player("P1", tactics="phalanx", tactics_public=True)))
     assert CopyTactics("phalanx") in legal_actions(_db(), state)
 
 
-def test_copy_tactics_requires_public() -> None:
-    """对手阵型未公开时不可复制."""
+def test_copy_tactics_legal_after_owner_switched() -> None:
+    """复制来源为公共区: 公开者已换走旧阵型, 旧阵型仍可被复制(规则书 p3)."""
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=2),
+            _player("P1", tactics="fighting_band", tactics_public=True)))
+    assert CopyTactics("phalanx") in legal_actions(_db(), state)
+
+
+def test_copy_tactics_requires_public_area() -> None:
+    """阵型未入公共区(对手私有激活/无阵型)时不可复制."""
     state = _state(players=(
         _player("P0", military_actions=3),
         _player("P1", tactics="phalanx", tactics_public=False)))
@@ -305,19 +327,25 @@ def test_copy_tactics_requires_public() -> None:
 
 def test_copy_tactics_requires_two_military_actions() -> None:
     """复制需 2 红点."""
-    state = _state(players=(
-        _player("P0", military_actions=1),
-        _player("P1", tactics="phalanx", tactics_public=True)))
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=1),
+            _player("P1", tactics="phalanx", tactics_public=True)))
     assert CopyTactics("phalanx") not in legal_actions(_db(), state)
 
 
 def test_copy_tactics_excludes_own_current() -> None:
-    """已是自己当前阵型的卡不再枚举复制(无意义动作)."""
-    state = _state(players=(
-        _player("P0", military_actions=3, tactics="phalanx",
-                tactics_public=True),
-        _player("P1", tactics="phalanx", tactics_public=True)))
-    assert CopyTactics("phalanx") not in legal_actions(_db(), state)
+    """已是自己当前阵型的卡不再枚举复制(无意义动作); 公共区其余卡照常."""
+    state = _state(
+        public_tactics=("phalanx", "fighting_band"),
+        players=(
+            _player("P0", military_actions=3, tactics="phalanx",
+                    tactics_public=True),
+            _player("P1", tactics="fighting_band", tactics_public=True)))
+    actions = legal_actions(_db(), state)
+    assert CopyTactics("phalanx") not in actions
+    assert CopyTactics("fighting_band") in actions
 
 
 # --- PlayTactics / CopyTactics 结算 --------------------------------------------
@@ -340,28 +368,32 @@ def test_play_tactics_apply() -> None:
     assert state.military_discard == ()
 
 
-def test_play_tactics_replaces_old_to_removed() -> None:
-    """已有旧阵型(已公开)时打出新阵型: 旧阵型入 removed, 不入军事弃牌堆.
+def test_play_tactics_replaces_public_old_stays_in_area() -> None:
+    """换新阵型: 已公开的旧阵型留在公共阵型区(他人仍可复制), 不入 removed.
 
-    官方规则(规则书 p3): 已公开的阵型被替换后留公共阵型区, 重复卡从游戏
-    中移除, 永不回流军事牌堆; SIMPLIFICATION: 不单独建模公共阵型区, 被
-    替换的实体阵型卡均入 removed(T13, T4 审查交办)。
+    官方规则(规则书 p3): 公开阵型牌放到军事版图的公共阵型区; 玩家换新
+    阵型时旧激活阵型若已公开则留在公共区。废弃 T13"旧阵型入 removed"
+    过渡口径(P3-T2)。
     """
     db = _db()
-    state = _state(players=(
-        _player("P0", military_actions=3, tactics="phalanx",
-                tactics_public=True, hand_military=("fighting_band",)),
-        _player("P1")))
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=3, tactics="phalanx",
+                    tactics_public=True, hand_military=("fighting_band",)),
+            _player("P1")))
     state = apply(state, PlayTactics("fighting_band"), db)
     p = state.players[0]
     assert p.tactics == "fighting_band"
     assert p.tactics_public is False
     assert state.military_discard == ()
-    assert state.removed == ("phalanx",)
+    assert state.removed == ()
+    assert state.public_tactics == ("phalanx",)
 
 
 def test_replace_unpublic_tactics_also_removed() -> None:
-    """未公开的实体旧阵型被替换同样入 removed(简化口径, 不回流军事牌堆)."""
+    """未公开的实体旧阵型被替换入 removed(防御性口径; 正常流程不可达:
+    每回合限 1 次打出/复制 + 回合开始强制公开, 不可能同回合替换)."""
     db = _db()
     state = _state(players=(
         _player("P0", military_actions=3, tactics="phalanx",
@@ -370,14 +402,17 @@ def test_replace_unpublic_tactics_also_removed() -> None:
     state = apply(state, PlayTactics("fighting_band"), db)
     assert state.military_discard == ()
     assert state.removed == ("phalanx",)
+    assert state.public_tactics == ()
 
 
 def test_copy_tactics_apply() -> None:
-    """复制: 扣 2 红点, 不消耗手牌, 成为自己的专属阵型(引用, 无实体卡)."""
+    """复制: 扣 2 红点, 不消耗手牌, 成为自己的专属阵型(引用); 卡留公共区."""
     db = _db()
-    state = _state(players=(
-        _player("P0", military_actions=3, hand_military=("fighting_band",)),
-        _player("P1", tactics="phalanx", tactics_public=True)))
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=3, hand_military=("fighting_band",)),
+            _player("P1", tactics="phalanx", tactics_public=True)))
     state = apply(state, CopyTactics("phalanx"), db)
     p = state.players[0]
     assert p.military_actions == 1
@@ -385,37 +420,45 @@ def test_copy_tactics_apply() -> None:
     assert p.tactics == "phalanx"
     assert p.tactics_copied is True
     assert p.tactics_this_turn is True
-    # 对手阵型不受影响
+    # 对手阵型与公共区均不受影响
     assert state.players[1].tactics == "phalanx"
+    assert state.public_tactics == ("phalanx",)
 
 
 def test_replace_copied_tactics_no_phantom_card() -> None:
-    """替换复制来的阵型: 仅丢弃引用, 不产生幻影卡入军事弃牌堆(卡牌守恒)."""
+    """替换复制来的阵型: 仅丢弃引用, 公共区原卡不动, 无幻影卡(卡牌守恒)."""
     db = _db()
-    state = _state(players=(
-        _player("P0", military_actions=3, tactics="phalanx",
-                tactics_copied=True, hand_military=("fighting_band",)),
-        _player("P1", tactics="phalanx", tactics_public=True)))
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=3, tactics="phalanx",
+                    tactics_copied=True, hand_military=("fighting_band",)),
+            _player("P1", tactics="phalanx", tactics_public=True)))
     state = apply(state, PlayTactics("fighting_band"), db)
     p = state.players[0]
     assert p.tactics == "fighting_band"
     assert p.tactics_copied is False
     assert state.military_discard == ()
+    assert state.removed == ()
+    assert state.public_tactics == ("phalanx",)
 
 
-def test_replace_physical_tactics_when_copying() -> None:
-    """复制时替换实体旧阵型: 旧阵型(实体卡)入 removed, 不入军事弃牌堆."""
+def test_replace_public_tactics_when_copying() -> None:
+    """复制时替换已公开实体旧阵型: 旧阵型留公共区, 不入 removed/军事弃牌堆."""
     db = _db()
-    state = _state(players=(
-        _player("P0", military_actions=3, tactics="fighting_band",
-                tactics_public=True),
-        _player("P1", tactics="phalanx", tactics_public=True)))
+    state = _state(
+        public_tactics=("fighting_band", "phalanx"),
+        players=(
+            _player("P0", military_actions=3, tactics="fighting_band",
+                    tactics_public=True),
+            _player("P1", tactics="phalanx", tactics_public=True)))
     state = apply(state, CopyTactics("phalanx"), db)
     p = state.players[0]
     assert p.tactics == "phalanx"
     assert p.tactics_copied is True
     assert state.military_discard == ()
-    assert state.removed == ("fighting_band",)
+    assert state.removed == ()
+    assert state.public_tactics == ("fighting_band", "phalanx")
 
 
 def test_tactics_actions_unavailable_after_use() -> None:
@@ -441,7 +484,10 @@ def test_action_serialization_round_trip() -> None:
 
 
 def test_reveal_tactics_at_turn_start() -> None:
-    """回合开始阶段: 有未公开专属阵型的玩家必须公开(规则书 p3)."""
+    """回合开始阶段: 有未公开专属阵型的玩家必须公开, 实体卡入公共阵型区.
+
+    规则书 p3: 公开阵型牌放到军事版图的公共阵型区(GameState.public_tactics)。
+    """
     db = _db()
     state = _state(players=(
         _player("P0", military_actions=0),
@@ -451,6 +497,52 @@ def test_reveal_tactics_at_turn_start() -> None:
     assert state.current_player == 1
     assert p1.tactics_public is True
     assert p1.tactics == "phalanx"
+    assert state.public_tactics == ("phalanx",)
+
+
+def test_reveal_same_name_covers() -> None:
+    """同名覆盖: 公共区已有同名牌时公开实体卡, 公共区保留一张, 重复实体卡
+    从游戏中移除(规则书 p3 覆盖/移除二选一, 同 id 下状态等价, 引擎固定此
+    口径; 真实牌库阵型有 2 份, 如 phalanx)."""
+    db = _db()
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=0),
+            _player("P1", tactics="phalanx", tactics_public=False)))
+    state = apply(state, PassTurn(), db)
+    p1 = state.players[1]
+    assert p1.tactics_public is True
+    assert state.public_tactics == ("phalanx",)
+    # 重复实体卡恰一份入 removed(其余为回合开始弃掉的卡牌列 xc*)
+    assert state.removed.count("phalanx") == 1
+
+
+def test_reveal_copied_tactics_leaves_public_area_untouched() -> None:
+    """复制引用的阵型公开时不动公共区(无实体卡): 不追加、不产生幻影 removed."""
+    db = _db()
+    state = _state(
+        public_tactics=("phalanx",),
+        players=(
+            _player("P0", military_actions=0),
+            _player("P1", tactics="phalanx", tactics_public=False,
+                    tactics_copied=True)))
+    state = apply(state, PassTurn(), db)
+    p1 = state.players[1]
+    assert p1.tactics_public is True
+    assert state.public_tactics == ("phalanx",)
+    assert "phalanx" not in state.removed
+
+
+def test_public_tactics_serialization_round_trip() -> None:
+    """public_tactics 序列化往返; 空区不落盘(旧格式逐字节兼容), 旧格式缺键
+    落默认空."""
+    state = _state(public_tactics=("phalanx", "fighting_band"))
+    assert from_dict(to_dict(state)) == state
+    assert "public_tactics" not in to_dict(_state())
+    data = to_dict(state)
+    del data["public_tactics"]
+    assert from_dict(data).public_tactics == ()
 
 
 def test_tactics_this_turn_cleared_on_action_restore() -> None:

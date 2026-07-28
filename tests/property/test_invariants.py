@@ -30,15 +30,16 @@
    yellow_bank ∈ [0, 18], blue_bank ∈ [0, 蓝点上界], card_tokens ≥ 0。
 4. 卡牌守恒: 牌列 + 当前牌堆 + future_decks + 弃牌堆 + removed
    + 各玩家(手牌 + developed + 政府 + 场上领袖 + 进行中/完成奇迹
-   + 实体专属阵型[tactics 且非 tactics_copied] + 在途战争牌
-   declared_wars 的卡 id)
+   + 未公开实体专属阵型[tactics 且非 tactics_copied 且非 tactics_public]
+   + 在途战争牌 declared_wars 的卡 id)
    + 军事域(military_deck + future_military_decks + military_discard
    + current_events/future_events/past_events + 各玩家军事手牌)
+   + 公共阵型区(public_tactics, P3-T2)
    ≡ 牌库全集(内政 + 军事, multiset; buildings/card_tokens 的键均 ⊆
    developed, 不重复计数; 领袖弃置入弃牌堆、政府更替入弃牌堆、过期入
    removed; 时代 A 事件堆余量与旧军事牌堆余牌入 removed; 打出阵型手牌
-   -> tactics 字段, 替换时实体卡入 removed(规则书 p3, T13; 复制引用仅
-   引用不计);
+   -> tactics 字段, 回合开始强制公开 -> 实体卡入公共阵型区(规则书 p3,
+   P3-T2; 同名牌覆盖时重复实体卡入 removed; 复制引用无实体卡不计);
    宣告战争手牌 -> declared_wars(在途), 结算后入军事弃牌堆)。
 5. 序列化往返: 每 10 步 from_dict(to_dict(state)) == state(含 P2 新字段
    非空值: pacts/declared_wars/colonies/wonders_facedown 等, 3 人局
@@ -143,6 +144,8 @@ def _accounted(state: GameState) -> Counter:
     accounted.update(state.current_events)
     accounted.update(state.future_events)
     accounted.update(state.past_events)
+    # 公共阵型区(规则书 p3, P3-T2): 公开阵型实体卡在此记账
+    accounted.update(state.public_tactics)
     # 响应中的在途牌: 侵略揭示卡(aggression_defense pending context)、
     # 竞拍/牺牲中的地区牌(colonize pending context)与展示中的条约牌
     # (pact_offer pending context)暂不在任何牌域
@@ -164,8 +167,12 @@ def _accounted(state: GameState) -> Counter:
         accounted.update(p.wonders)
         if p.wonder_progress is not None:
             accounted.update([p.wonder_progress[0]])
-        if p.tactics is not None and not p.tactics_copied:
-            # 专属阵型实体卡(PlayTactics 入场); 复制引用无实体卡不计
+        if (p.tactics is not None and not p.tactics_copied
+                and not p.tactics_public):
+            # 未公开的实体专属阵型卡(PlayTactics 入场, 回合开始公开后转入
+            # 公共阵型区记账; 与公共区同名的第二份实体卡在公开前的窗口期
+            # 也由此计入, 故按 tactics_public 而非公共区成员判定)。已公开
+            # 实体卡在 public_tactics 记账, 复制引用无实体卡不计
             accounted.update([p.tactics])
         # 在途战争牌(DeclareWar 手牌 -> declared_wars, 次回合结算后入
         # 军事弃牌堆; 与 T8 侵略在途口径一致)

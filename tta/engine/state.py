@@ -62,9 +62,11 @@ class PlayerState:
     turn_discounts: dict[str, int] = field(default_factory=dict)
     # --- P2 军事/政治字段(机制后续任务填充, 本任务仅建模与序列化) ---
     tactics: str | None = None               # 当前专属阵型
-    tactics_public: bool = False             # 已公开(可被复制)
+    tactics_public: bool = False             # 已公开(实体卡已入公共阵型区)
     tactics_this_turn: bool = False          # 本回合已打出/复制阵型(限 1)
-    tactics_copied: bool = False             # 当前阵型为复制引用(无实体卡, 替换时不入弃牌堆)
+    # 当前阵型为复制引用(无实体卡): 公开入区与替换时据此与同名实体卡区分
+    # (真实牌库阵型有 2 份, 如 phalanx; 见 turn._reveal_tactics)
+    tactics_copied: bool = False
     colonies: tuple[str, ...] = ()
     # 已宣告待结算的战争牌: (卡 id, 目标座位); 宣告者下个回合开始阶段结算
     declared_wars: tuple[tuple[str, int], ...] = ()
@@ -108,6 +110,9 @@ class GameState:
     current_events: tuple[str, ...] = ()
     future_events: tuple[str, ...] = ()
     past_events: tuple[str, ...] = ()
+    # 公共阵型区(规则书 p3: 公开阵型牌放到军事版图的公共阵型区, 无数量限制;
+    # CopyTactics 合法来源; 卡 id 每张至多一份, 同名覆盖见 turn._reveal_tactics)
+    public_tactics: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if len(self.card_row) != ROW_SLOTS:
@@ -251,7 +256,7 @@ def _player_from_dict(d: dict) -> PlayerState:
 
 def to_dict(state: GameState) -> dict:
     """序列化为 JSON 可编码 dict."""
-    return {
+    data = {
         "round": state.round,
         "age": state.age.value,
         "current_player": state.current_player,
@@ -275,6 +280,10 @@ def to_dict(state: GameState) -> dict:
         "future_events": list(state.future_events),
         "past_events": list(state.past_events),
     }
+    if state.public_tactics:
+        # 公共阵型区; 非空才落盘(旧格式逐字节兼容)
+        data["public_tactics"] = list(state.public_tactics)
+    return data
 
 
 def from_dict(data: dict) -> GameState:
@@ -304,6 +313,8 @@ def from_dict(data: dict) -> GameState:
         current_events=tuple(data.get("current_events", ())),
         future_events=tuple(data.get("future_events", ())),
         past_events=tuple(data.get("past_events", ())),
+        # P3 字段: 旧格式缺省落默认值(向后兼容)
+        public_tactics=tuple(data.get("public_tactics", ())),
     )
 
 

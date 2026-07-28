@@ -11,6 +11,12 @@ p3, 永不回流)改变终局状态分布 -> 仅终局 hash 变化, 轨迹四元
 architecture/agriculture/industry, 见终局 past_events)于 endgame_scoring
 生效但各计 0 分——Impact 计分通路已被触发, 非零产出口径由
 tests/engine/test_events_iii.py 脚本化场景覆盖(final_scores (13, 7) 等)。
+
+P3-T2 回填说明(2026-07-28): 公共阵型区建模(规则书 p3: 公开阵型入
+GameState.public_tactics; CopyTactics 来源改为公共区; 换阵留区不再入
+removed)改变随机玩家合法动作空间与状态分布 -> steps 211 -> 213,
+终局 hash 变化(终局 public_tactics = ('heavy_cavalry', 'phalanx',
+'legion')), scores/winners/rounds 不变。
 """
 
 from tta.agents.random_agent import RandomPlayer
@@ -24,9 +30,9 @@ from tta.orchestrator.runner import run_game
 GOLDEN_SCORES = (0, 0)
 GOLDEN_WINNERS = (0, 1)
 GOLDEN_ROUNDS = 21
-GOLDEN_STEPS = 211
+GOLDEN_STEPS = 213
 GOLDEN_FINAL_STATE_HASH = (
-    "4ece2aad2795bae7b5626471e7d3154bb854e2715cf464b073c4e7def108bbc4"
+    "3696158e29407b4ff0070da76e7f6760c0c1d9be215c5bcc83b3f19d7d20c346"
 )
 
 
