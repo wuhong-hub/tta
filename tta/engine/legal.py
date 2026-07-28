@@ -41,12 +41,13 @@ legal 为殖民牺牲枚举 <=3 张单位的全部可履约组合(去重组合�
 
 from itertools import combinations
 
-from tta.engine import effects, events, military, politics
+from tta.engine import choices, effects, events, military, politics
 from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
     ChooseEventOption,
+    ChooseTurnStart,
     ColonizeBid,
     ColonizePass,
     ColonizePlayBonus,
@@ -382,6 +383,10 @@ def _pending_actions(
         # 法律兜底: 超上限时手牌必非空, 故恒有 DiscardMilitary 可用
         return [DiscardMilitary(card_id)
                 for card_id in dict.fromkeys(p.hand_military)]
+    if pending.kind == choices.KIND_TURN_START_CHOICE:
+        # 回合开始选择(churchill 二选一): 强制, 不可 DeclineResponse
+        return [ChooseTurnStart(option)
+                for option in choices.turn_start_options(pending)]
     if pending.kind == events.KIND_EVENT_MARKETS:
         # development_of_markets: +2 食物或 +2 资源二选一
         return [ChooseEventOption("food"), ChooseEventOption("resource")]

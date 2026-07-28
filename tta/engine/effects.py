@@ -75,9 +75,12 @@ Age A 领袖钩子(Task 9):
   再计一份文化, 即双倍);
 - sid_meier: STATIC_BONUS(实验室每级 +1 文化、每个实验室 -1 科技,
   按已研发卡计, 同 leonardo 口径);
-- bill_gates(实验室每级产 1 资源, 需经济系统改造)与
-  winston_churchill(每回合二选一, 需回合选择机制): P2-DEFERRED,
-  仅卡文本;
+- bill_gates: 实验室产资源(P3-T4, 见 economy 的 LAB 口径); 被替换离场时
+  +文化 = Σ 有工人实验室卡 × 时代等级(即时, 见 gates_lab_bonus_culture,
+  挂钩于 apply._play_leader; 终局奖励已在 P2-T12 实现, 见
+  events._bill_gates_endgame);
+- winston_churchill: 每回合二选一(P3-T4, 回合开始选择机制见 choices):
+  +3 文化, 或 +3 科技 + 本回合军事建造折扣 3;
 - 特殊科技: military_theory / civil_service / satellites 静态加成;
   civil_service 研发时 +3 蓝点(on_develop_tech_gains 按卡 id);
   engineering 建造折扣与四阶段 P2-DEFERRED;
@@ -176,8 +179,8 @@ LEADER_NEWTON = "isaac_newton"
 LEADER_EINSTEIN = "albert_einstein"
 LEADER_GANDHI = "mahatma_gandhi"
 LEADER_CHAPLIN = "charlie_chaplin"
-LEADER_BILL_GATES = "bill_gates"                   # P2-DEFERRED, 无钩子
-LEADER_CHURCHILL = "winston_churchill"             # P2-DEFERRED, 无钩子
+LEADER_BILL_GATES = "bill_gates"                   # 产资源见 economy, 离场见下
+LEADER_CHURCHILL = "winston_churchill"             # 每回合二选一, 见 choices
 LEADER_SID_MEIER = "sid_meier"
 
 # 时代 II 特殊科技卡 id(justice_system 研发时 +3 蓝点, 按卡 id 挂钩)
@@ -722,6 +725,21 @@ STATIC_BONUS_HANDLERS.update({
     "first_space_flight": _first_space_flight_bonus,
     "fast_food_chains": _fast_food_chains_bonus,
 })
+
+
+def gates_lab_bonus_culture(db: CardDB, p: PlayerState) -> int:
+    """bill_gates 被替换离场奖励: +文化 = Σ 有工人实验室卡 × 时代等级.
+
+    口径为实验室的每回合额外产出(每张有工人的实验室卡产 1 蓝点, 蓝点价值
+    = 时代等级, 规则书附录), 即每卡计 1 次(与工人数无关); 级 = 时代序,
+    同 _TECH_LEVEL 口径。挂钩于 apply._play_leader 的替换分支(即时结算);
+    终局奖励见 events._bill_gates_endgame(P2-T12 已实现)。
+    """
+    return sum(
+        _TECH_LEVEL[db.get(card_id).age]
+        for card_id, workers in p.buildings.get(CardCategory.LAB.value, {}).items()
+        if workers > 0
+    )
 
 
 # --- 行动卡 handler 工厂 ---------------------------------------------------------

@@ -193,6 +193,17 @@ class ChooseEventOption:
 
 
 @dataclass(frozen=True)
+class ChooseTurnStart:
+    """回合开始选择 pending(turn_start_choice)的决策(如 churchill 二选一).
+
+    option 合法取值由 pending context 的来源卡决定(见
+    choices.turn_start_options); 该 pending 为强制选择, 不可 DeclineResponse。
+    """
+
+    option: str
+
+
+@dataclass(frozen=True)
 class ColonizeBid:
     """殖民竞拍出价: 须高于当前最高出价, 且不超过可承诺殖民军力上限
     (见 politics.colonization_cap; 规则书 p7 殖民节)。"""
@@ -263,7 +274,7 @@ Action = (
     | PlayTactics | CopyTactics | PassTurn
     | DeclineResponse | SeedEvent | PlayAggression | DeclareWar
     | ProposePact | PactAccept | PactReject | CancelPact | Resign
-    | ChooseEventOption
+    | ChooseEventOption | ChooseTurnStart
     | ColonizeBid | ColonizePass | ColonizePlayBonus | ColonizeSacrifice
     | PlayDefenseBonus | DiscardForStrength | PassResponse
 )
@@ -295,6 +306,7 @@ _ACTION_TYPES: dict[str, type] = {
     "cancel_pact": CancelPact,
     "resign": Resign,
     "choose_event_option": ChooseEventOption,
+    "choose_turn_start": ChooseTurnStart,
     "colonize_bid": ColonizeBid,
     "colonize_pass": ColonizePass,
     "colonize_play_bonus": ColonizePlayBonus,

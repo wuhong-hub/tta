@@ -14,13 +14,14 @@ state.acting_index): 响应期由 responder 结算 pending, pop 后控制权
 
 from dataclasses import replace
 
-from tta.engine import effects, events, politics, turn
+from tta.engine import choices, effects, events, politics, turn
 from tta.engine.actions import (
     Action,
     Build,
     BuildWonderStage,
     CancelPact,
     ChooseEventOption,
+    ChooseTurnStart,
     ColonizeBid,
     ColonizePass,
     ColonizePlayBonus,
@@ -121,6 +122,9 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
             # 科技之战胜者夺取特殊科技 pending 由 politics 结算
             return politics.apply_war_seize(db, state, action.option)
         return events.apply_event_choice(db, state, action.option)
+    if isinstance(action, ChooseTurnStart):
+        # 回合开始选择(churchill 等)由 choices 结算, 完成后落入 POLITICS
+        return choices.apply_turn_start_choice(db, state, action.option)
     if isinstance(action, ColonizeBid):
         return politics.colonize_bid(db, state, action)
     if isinstance(action, ColonizePass):
@@ -428,6 +432,11 @@ def _play_leader(db: CardDB, state: GameState, action: PlayLeader) -> GameState:
     p = replace(p, civil_actions=p.civil_actions - 1)
     if p.leader is not None:
         state = replace(state, discard=state.discard + (p.leader,))
+        # bill_gates 被替换离场: +文化 = Σ 有工人实验室卡 × 时代等级(即时;
+        # 终局奖励见 events._bill_gates_endgame)
+        if p.leader == effects.LEADER_BILL_GATES:
+            p = replace(
+                p, culture=p.culture + effects.gates_lab_bonus_culture(db, p))
         p = replace(p, civil_actions=p.civil_actions + 1)
     p = replace(p, leader=action.card_id,
                 leader_ages=p.leader_ages + (card.age.value,))

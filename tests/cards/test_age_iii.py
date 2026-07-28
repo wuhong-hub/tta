@@ -480,12 +480,12 @@ def test_chaplin_best_theater_by_total_production(db: CardDB) -> None:
     assert effects.static_bonuses(db, p)["culture"] == 4
 
 
-def test_bill_gates_churchill_deferred(db: CardDB) -> None:
-    """bill_gates / winston_churchill: 能力 P2-DEFERRED, 无钩子."""
+def test_bill_gates_churchill_no_static_handler(db: CardDB) -> None:
+    """bill_gates / winston_churchill: 无静态加成 handler(P3-T4 起能力经
+    economy/choices 钩子实现, 见 tests/engine/test_choices.py)."""
     for card_id in ("bill_gates", "winston_churchill"):
         card = db.get(card_id)
         assert card.handler == "", card_id
-        assert "P2-DEFERRED" in card.text, card_id
         p = _player(leader=card_id)
         assert effects.static_bonuses(db, p) == {}, card_id
 

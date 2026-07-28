@@ -1552,9 +1552,10 @@ def _bill_gates_endgame(db: CardDB, state: GameState) -> GameState:
     """bill_gates 终局奖励: +文化 = 实验室额外产出 = Σ 有工人实验室
     工人数 × 等级(级 = 时代序).
 
-    实验室每回合按矿山方式产资源的经济改造 P2-DEFERRED(不影响
-    impact_of_industry, 规则书附录明示不计); 本函数仅结算规则书 p1 的
-    游戏结束奖励效果。
+    实验室每回合按矿山方式产资源的经济改造见 economy 的 LAB 口径(P3-T4;
+    不计入 impact_of_industry, 规则书附录明示, 见 _impact_of_industry);
+    被替换离场的即时奖励见 effects.gates_lab_bonus_culture; 本函数仅结算
+    规则书 p1 的游戏结束奖励效果。
     """
     for i, p in enumerate(state.players):
         if p.resigned or p.leader != BILL_GATES:

@@ -24,9 +24,9 @@
   官方卡面即 +3 文化)而非 +3 军力。
 
 行动卡 id 带时代后缀(如 reserves_iii), handler 名 = 卡 id 全名,
-effects.py 按时代实例注册(X 加成各异)。bill_gates 实验室产资源(需
-经济系统改造)与 winston_churchill 每回合二选一(需回合选择机制)
-P2-DEFERRED, 仅保留卡文本。
+effects.py 按时代实例注册(X 加成各异)。bill_gates 实验室产资源与被替换
+离场奖励、winston_churchill 每回合二选一已于 P3-T4 实现(见
+tta/engine/economy.py 与 tta/engine/choices.py)。
 """
 
 from tta.engine.enums import Age, CardCategory, DeckType, SpecialType
@@ -280,13 +280,14 @@ CHARLIE_CHAPLIN = _leader(
 BILL_GATES = _leader(
     "bill_gates", "比尔·盖茨", "Bill Gates",
     "你的实验室每级产出 1 资源; 当他离场或游戏结束时, +文化等于该额外产出"
-    "(实验室产资源需经济系统改造, 离场结算 P2-DEFERRED)。",
+    "(产资源见 economy; 被替换离场即时结算见 effects.gates_lab_bonus_culture; "
+    "终局见 events._bill_gates_endgame)。",
 )
 
 WINSTON_CHURCHILL = _leader(
     "winston_churchill", "温斯顿·丘吉尔", "Winston Churchill",
     "你的回合开始时二选一: +3 文化; 或本回合军事用途有 3 科技与 3 资源"
-    "(每回合选择机制 P2-DEFERRED)。",
+    "(回合开始选择机制见 choices)。",
 )
 
 SID_MEIER = _leader(

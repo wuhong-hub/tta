@@ -36,7 +36,9 @@ advance(state, db) 流程:
    专属阵型; 当前玩家 declared_wars 逐张结算, 见
    politics.resolve_declared_wars)-> 强制公开专属阵型(规则书 p3:
    tactics 非 None 且未公开 -> tactics_public=True, 实体卡入公共阵型区
-   public_tactics, 同名覆盖/复制引用口径见 _reveal_tactics):
+   public_tactics, 同名覆盖/复制引用口径见 _reveal_tactics) -> 回合开始
+   选择(P3-T4: 当前玩家领袖需"每回合选择"时压 turn_start_choice pending,
+   phase 保持 TURN_START 直至 ChooseTurnStart 结算, 见 choices):
    - 时代 A 于第一次补牌时结束: 先用 A 堆补空位, 余牌入 removed, 启用
      I 堆继续补(官方规则: 时代 A 结束 nothing else happens -> 无过期,
      也无每人 -2 黄点);
@@ -58,7 +60,7 @@ advance(state, db) 流程:
 
 from dataclasses import replace
 
-from tta.engine import civ, economy, effects, events, military, politics
+from tta.engine import choices, civ, economy, effects, events, military, politics
 from tta.engine.constants import FOOD_SHORTAGE_CULTURE_PENALTY
 from tta.engine.enums import Age, Phase
 from tta.engine.model import CardDB
@@ -139,6 +141,11 @@ def proceed(state: GameState, db: CardDB) -> GameState:
     # 规则书 p3 回合流程: 补充卡牌列 -> 结算战争 -> 公开专属阵型
     state = politics.resolve_declared_wars(db, state)
     state = _reveal_tactics(state)
+    # 回合开始选择(P3-T4, 如 churchill 每回合二选一): 压 pending, phase
+    # 保持 TURN_START 直至 ChooseTurnStart 结算(见 choices.apply_turn_start_choice)
+    choice = choices.turn_start_choice_pending(db, state)
+    if choice is not None:
+        return replace(state, pending=state.pending + (choice,))
     # 第一回合跳过政治阶段(回合开始阶段 _start_of_turn 对 round==1 本就跳过)
     phase = Phase.ACTION if state.round == 1 else Phase.POLITICS
     return replace(state, phase=phase)
