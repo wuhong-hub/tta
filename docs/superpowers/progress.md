@@ -48,3 +48,18 @@ Task 13: complete (commits d3f646c..2b281f1;公共阵型区修复/退出牌堆�
 全部 13 任务完成,进入 P2 全分支终审
 P2 终审: 5 项修正 (commit 90e01e4): 军事手牌/条约过期、退出者禁竞拍、守恒补偿、防御上限总值;734 测试全绿
 P2 完成
+
+# P3 人类玩家界面与引擎收口(plan: 2026-07-26-p3-human-interface.md)
+Task 1: complete (commits 12eb15b..c638f69, review clean;闸口无作弊通道,7 非法场景实测全拦截)
+Task 2: complete (commits c638f69..e347ad9, review clean;守恒五链独立对账全过;tactics_copied 保留论证成立)
+Task 3: complete (commits e347ad9..de0d193, review clean;弃牌先于抓牌官方顺序落地,指纹 rounds 21→20 归因官方顺序修正)
+Task 4: complete (03e4210 + fix 6ce1727;审查裁决 Gates 离场公式改每工人×等级与终局统一;Churchill 折扣平铺口径与 patriotism 一致,引擎级简化留 T10 统一裁决)
+Task 5: complete (commits 6ce1727..9b9d6c6, review clean;两条约 PDF 亲验一致;⚠️ breakthrough 研发触发对方付费待 FAQ)
+Task 6: complete (c71c544 + fix 3118e72;审查发现 bach 升级漏 urban_limit 已修;shakespeare 研发 -1 白点仍 DEFERRED 记 deferred.md)
+Task 7: complete (commits 9b9d6c6..4e8f22f;隐藏信息过滤抽查通过(对手仅数量,本人可见);render 纯函数)
+Task 8: complete (commits 4e8f22f..45c0214;悔棋用 append-only undo 标记,T9 回放需统一解释;悔棋不回退 AI RNG)
+Task 9: complete (commits 45c0214..0cea27c;undo 作废解释/确定性重放+hash 校验/战报导出)
+Task 10: complete (commits 0cea27c..12f6cbe;deferred 22 项清零(7 全实现+15 静态实现剩余归 P4);rule-interpretations.md 35 项入库;869 测试)
+全部 10 任务完成,进入 P3 全分支终审
+P3 终审: Ready for P4;阵型泄漏等 3 处渲染修复 (37af1f6);P4 第一任务已定: view_for(state, seat) 程序化隐藏信息视图
+P3 完成
