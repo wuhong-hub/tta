@@ -226,7 +226,7 @@ def test_gates_lab_tokens_spent_as_resources() -> None:
 
 
 def test_gates_replacement_grants_lab_level_culture() -> None:
-    """PlayLeader 替换 bill_gates: +文化 = Σ 有工人实验室卡 × 时代等级."""
+    """PlayLeader 替换 bill_gates: +文化 = Σ 每个实验室工人 × 该卡时代等级."""
     db = build_card_db()
     p0 = _player(
         "P0",
@@ -240,8 +240,8 @@ def test_gates_replacement_grants_lab_level_culture() -> None:
     state = _state(players=(p0, _player("P1")))
     new = apply(state, PlayLeader("sid_meier"), db)
     q = new.players[0]
-    # philosophy(A=1) + computers(III=4) = 5(每卡 1 次, 与工人数无关)
-    assert q.culture == 10
+    # philosophy(A=1) × 1 工人 + computers(III=4) × 2 工人 = 9(与终局公式同口径)
+    assert q.culture == 14
     assert q.leader == "sid_meier"
     assert "bill_gates" in new.discard
     # 替换领袖拿回 1 白点(净耗 0)

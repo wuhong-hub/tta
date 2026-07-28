@@ -76,7 +76,7 @@ Age A 领袖钩子(Task 9):
 - sid_meier: STATIC_BONUS(实验室每级 +1 文化、每个实验室 -1 科技,
   按已研发卡计, 同 leonardo 口径);
 - bill_gates: 实验室产资源(P3-T4, 见 economy 的 LAB 口径); 被替换离场时
-  +文化 = Σ 有工人实验室卡 × 时代等级(即时, 见 gates_lab_bonus_culture,
+  +文化 = Σ 每个实验室工人 × 该卡时代等级(即时, 见 gates_lab_bonus_culture,
   挂钩于 apply._play_leader; 终局奖励已在 P2-T12 实现, 见
   events._bill_gates_endgame);
 - winston_churchill: 每回合二选一(P3-T4, 回合开始选择机制见 choices):
@@ -728,15 +728,16 @@ STATIC_BONUS_HANDLERS.update({
 
 
 def gates_lab_bonus_culture(db: CardDB, p: PlayerState) -> int:
-    """bill_gates 被替换离场奖励: +文化 = Σ 有工人实验室卡 × 时代等级.
+    """bill_gates 被替换离场奖励: +文化 = Σ 每个实验室工人 × 该卡时代等级.
 
-    口径为实验室的每回合额外产出(每张有工人的实验室卡产 1 蓝点, 蓝点价值
-    = 时代等级, 规则书附录), 即每卡计 1 次(与工人数无关); 级 = 时代序,
-    同 _TECH_LEVEL 口径。挂钩于 apply._play_leader 的替换分支(即时结算);
+    口径为实验室的每回合额外产出(每个实验室工人在其卡上产 1 蓝点, 蓝点
+    价值 = 时代等级, 规则书附录), 级 = 时代序, 同 _TECH_LEVEL 口径; 与
+    events._building_levels(T12 终局奖励)同口径(每工人 = 一张同等级卡)。
+    挂钩于 apply._play_leader 的替换分支(即时结算);
     终局奖励见 events._bill_gates_endgame(P2-T12 已实现)。
     """
     return sum(
-        _TECH_LEVEL[db.get(card_id).age]
+        workers * _TECH_LEVEL[db.get(card_id).age]
         for card_id, workers in p.buildings.get(CardCategory.LAB.value, {}).items()
         if workers > 0
     )
