@@ -75,8 +75,9 @@ SeedEvent 结算(规则书 p4/p7):
   条约终止"于 PlayAggression/DeclareWar 时先移除再快照
   (ATTACK_ENDING_PACTS); 主权丧失"无人能对 B 宣战"于 _war_actions 豁免;
   国际贸易协议 A 侧 +1 资源生产于 turn 回合末生产钩子; trade_routes
-  (每回合食物/资源置换)与 scientific_cooperation(每回合研发折扣)为
-  每回合选择类互动, P3-DEFERRED(可缔约但无效果, 卡 text 保留完整描述)。
+  (每回合食物/资源替换)挂钩于 effects.pay_with_trade_routes 支付入口,
+  scientific_cooperation(研发 -2 科技 + 对方付 1 科技)挂钩于
+  apply._develop_tech(P3-T5, 均见 effects 条约效果节)。
 - CancelPact(card_id)(3-4 人): 你为当事人的一项条约从双方 pacts 移除,
   卡入 removed, 效果终止。
 - Resign(时代 IV 不可用): 手牌入弃牌堆, 游戏区域卡牌入 removed(进行中

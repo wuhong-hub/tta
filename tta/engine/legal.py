@@ -159,11 +159,13 @@ def _take_card_legal(
 
 def _develop_actions(db: CardDB, p: PlayerState) -> list[Action]:
     actions: list[Action] = []
+    # scientific_cooperation 条约: 研发科技费 -2(与 apply._develop_tech 同口径)
+    pact_discount = effects.scientific_cooperation_discount(p)
     for card_id in dict.fromkeys(p.hand_civil):
         card = db.get(card_id)
         if card.category not in _DEVELOP_CATEGORIES:
             continue
-        if p.science < card.cost_science:
+        if p.science < max(0, card.cost_science - pact_discount):
             continue
         if card.category in UNIT_CATEGORIES:
             if p.military_actions >= 1:
@@ -205,7 +207,10 @@ def _build_actions(
     """Build 枚举. pending 子行动用 point_cost=0 + discount 调用."""
     actions: list[Action] = []
     civ = civ_values(db, p)
-    resources = resource_total(db, p)
+    # trade_routes A 侧: 资源费可用 1 食物抵 1 资源(每回合一次, 仅差额恰 1
+    # 时生效, 见 effects.trade_routes_substitution)
+    resources = resource_total(db, p) + effects.trade_routes_substitution(
+        db, p, "resource")
     developed = list(p.developed)
     for card_id in dict.fromkeys(developed):
         card = db.get(card_id)
@@ -251,7 +256,9 @@ def _upgrade_actions(
 ) -> list[Action]:
     """Upgrade 枚举. pending 子行动用 point_cost=0 + discount 调用."""
     actions: list[Action] = []
-    resources = resource_total(db, p)
+    # trade_routes A 侧: 资源费可用 1 食物抵 1 资源(同 _build_actions)
+    resources = resource_total(db, p) + effects.trade_routes_substitution(
+        db, p, "resource")
     developed = list(p.developed)
     for from_id in dict.fromkeys(developed):
         from_card = db.get(from_id)
@@ -325,7 +332,10 @@ def _wonder_actions(
     # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 要求供给区蓝点 > 0
     if p.blue_bank < 1:
         return []
-    if resource_total(db, p) < max(0, stages[stages_done] - discount):
+    # trade_routes A 侧: 资源费可用 1 食物抵 1 资源(同 _build_actions)
+    resources = resource_total(db, p) + effects.trade_routes_substitution(
+        db, p, "resource")
+    if resources < max(0, stages[stages_done] - discount):
         return []
     return [BuildWonderStage()]
 
@@ -343,7 +353,11 @@ def _develop_tech_pending_actions(
         card = db.get(card_id)
         if card.category not in _DEVELOP_CATEGORIES:
             continue
-        if p.science < max(0, card.cost_science - discount):
+        # scientific_cooperation 条约折扣同 _develop_actions 口径
+        cost = max(
+            0, card.cost_science - discount
+            - effects.scientific_cooperation_discount(p))
+        if p.science < cost:
             continue
         actions.append(DevelopTech(card_id))
     return actions
@@ -592,7 +606,9 @@ def _civilization_choice_actions(db: CardDB, p: PlayerState) -> list[Action]:
     """
     actions: list[Action] = []
     if (p.yellow_bank > 0
-            and food_total(db, p) >= events.CIVILIZATION_POPULATION_FOOD_COST):
+            and food_total(db, p)
+            + effects.trade_routes_substitution(db, p, "food")
+            >= events.CIVILIZATION_POPULATION_FOOD_COST):
         actions.append(ChooseEventOption(events.CIVILIZATION_OPTION_POPULATION))
     farm_mine = effects.PENDING_BUILD_CATEGORIES[effects.KIND_BUILD_FARM_MINE]
     if _build_actions(db, p, categories=farm_mine, point_cost=0, discount=1):

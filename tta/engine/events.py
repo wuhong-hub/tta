@@ -214,11 +214,13 @@ def apply_event_choice(
         return replace_player(state, idx, p)
     if pending.kind == KIND_EVENT_CIVILIZATION:
         if option == CIVILIZATION_OPTION_POPULATION:
-            # 官方选项 ①: +1 人口并付 1 食物(事件固定价, moses 折扣不适用)
+            # 官方选项 ①: +1 人口并付 1 食物(事件固定价, moses 折扣不适用;
+            # trade_routes B 侧可用 1 资源抵, 与 legal 同口径)
             p = state.players[idx]
             p = replace(p, yellow_bank=p.yellow_bank - 1,
                         worker_pool=p.worker_pool + 1)
-            p = economy.pay(db, p, "food", CIVILIZATION_POPULATION_FOOD_COST)
+            p = effects.pay_with_trade_routes(
+                db, p, "food", CIVILIZATION_POPULATION_FOOD_COST)
             return replace_player(state, idx, p)
         spec = CIVILIZATION_OPTION_PENDING.get(option)
         if spec is None:  # pragma: no cover - legal 已排除

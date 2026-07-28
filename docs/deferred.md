@@ -7,8 +7,8 @@ P2 阶段结束时的全部 `P2-DEFERRED` / `P3-DEFERRED` 残留项及建议归�
 
 | 卡牌 | 残留能力 | 现状 | 建议归属 |
 | --- | --- | --- | --- |
-| trade_routes_agreement | 每回合食物/资源置换 | P3-DEFERRED(可缔约无效果) | P3(每回合选择) |
-| scientific_cooperation | 每回合研发折扣 | P3-DEFERRED(可缔约无效果) | P3(每回合选择) |
+| trade_routes_agreement | 每回合食物/资源置换 | ~~P3-DEFERRED(可缔约无效果)~~ **已实现(P3-T5)**: 主货币不足且差额恰 1 时替换(SIMPLIFICATION, 官方为主动选择) | ~~P3(每回合选择)~~ |
+| scientific_cooperation | 每回合研发折扣 | ~~P3-DEFERRED(可缔约无效果)~~ **已实现(P3-T5)**: 研发 -2 科技 + 对方付 1(卡面无 each turn, 不限次) | ~~P3(每回合选择)~~ |
 | winston_churchill | 每回合二选一(+3 科技 或 3 白 3 红) | P2-DEFERRED | P3(回合开始选择 pending; T13 评估: 机制新增风险大, 不在 P2 收官顺带实现) |
 | bill_gates | 实验室每回合按矿山产资源; 中场离场结算 | P2-DEFERRED(终局奖励已实现, events._bill_gates_endgame) | P3(经济生产改造) |
 | alexander_the_great | 政治行动: 移出游戏换 1 黄点 | P2-DEFERRED(静态 +1/单位已实现) | P3(政治行动类领袖能力) |

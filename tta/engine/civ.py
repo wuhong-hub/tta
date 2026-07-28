@@ -49,8 +49,9 @@ PACT_STATIC_BONUSES: dict[str, tuple[dict[str, int], dict[str, int]]] = {
     # 卡牌数值表 v1.09 p3 条约表; 键语义与 civ 收益键映射一致。
     # open_borders 的"攻击者 +2 军力"条件加成不入表(politics 攻击快照处理);
     # international_trade_agreement A 侧 +1 资源生产不入表(turn 生产钩子);
-    # trade_routes_agreement / scientific_cooperation 为每回合选择类,
-    # P3-DEFERRED(卡 text 保留完整描述), 无静态加成。
+    # trade_routes_agreement(每回合食物/资源替换)与 scientific_cooperation
+    # (研发折扣 + 对方付费)为支付/研发挂钩类, P3-T5 实现于 effects/apply,
+    # 无静态加成。
     "open_borders_agreement": (
         {"military_actions": 1}, {"military_actions": 1}),
     "acceptance_of_supremacy": ({"culture": 1}, {"culture": -1}),
@@ -89,10 +90,7 @@ def _pact_partner(
     players: tuple[PlayerState, ...], idx: int, card_id: str,
 ) -> int | None:
     """同录同一条约卡 id 的另一玩家座位(缔约对方); 无则 None."""
-    for j, other in enumerate(players):
-        if j != idx and any(cid == card_id for cid, _ in other.pacts):
-            return j
-    return None
+    return effects.pact_partner_seat(players, idx, card_id)
 
 
 @dataclass(frozen=True)

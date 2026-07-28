@@ -24,10 +24,13 @@ from collections import Counter
 from dataclasses import replace
 
 from tta.cards import build_card_db
-from tta.engine import turn
+from tta.engine import effects, turn
 from tta.engine.actions import (
+    Build,
     CancelPact,
     DeclareWar,
+    DevelopTech,
+    IncreasePopulation,
     PactAccept,
     PactReject,
     PassTurn,
@@ -45,6 +48,7 @@ from tta.engine.legal import legal_actions
 from tta.engine.state import (
     ROW_SLOTS,
     GameState,
+    PendingEffect,
     PlayerState,
     from_dict,
     to_dict,
@@ -629,3 +633,224 @@ def test_caesar_used_not_retriggered() -> None:
     state = _state(players=(p0, p1, _player("P2")))
     state = apply(state, CancelPact("peace_treaty"), db)
     assert state.phase is Phase.ACTION
+
+
+# --- P3-T5: trade_routes_agreement 每回合食物/资源替换 -----------------------------
+#
+# 卡牌数值表 v1.09 p3 条约表: A "Can use 1食物 instead of 1资源 each turn";
+# B "Can use 1资源 instead of 1食物 each turn"。引擎确定性口径(SIMPLIFICATION):
+# 仅当主货币不足且差额恰为 1 时启用替换(官方为玩家主动选择); 每回合一次,
+# 已用标记 turn_discounts["trade_routes_used"], 回合末行动点恢复时清空。
+
+
+def _trade_routes_state(side: str, **p0_overrides: object) -> GameState:
+    """P0(side 侧)/P1(对侧)缔约 trade_routes 的 3 人局(ACTION 相位)."""
+    other = "B" if side == "A" else "A"
+    p0 = _player(
+        "P0", pacts=(("trade_routes_agreement", side),), **p0_overrides)
+    p1 = _player("P1", pacts=(("trade_routes_agreement", other),))
+    return _state(players=(p0, p1, _player("P2")), phase=Phase.ACTION)
+
+
+def test_trade_routes_side_a_food_for_resource() -> None:
+    # A 侧支付资源费(建青铜 2 资源), 资源差 1 点 -> 用 1 食物抵 1 资源
+    db = build_card_db()
+    state = _trade_routes_state(
+        "A", civil_actions=4,
+        developed=_INITIAL_DEVELOPED + ("bronze",),
+        card_tokens={"bronze": 1, "agriculture": 2})
+    legal = legal_actions(db, state)
+    assert Build("bronze") in legal  # 资源 1 + 食物抵 1 >= 造价 2
+    new = apply(state, Build("bronze"), db)
+    p = new.players[0]
+    # 支付: 1 食物(agriculture 2->1) + 1 资源(bronze 1->0)
+    assert p.card_tokens == {"agriculture": 1}
+    assert p.turn_discounts == {effects.TRADE_ROUTES_USED_KEY: 1}
+    assert p.buildings["mine"]["bronze"] == 3
+
+
+def test_trade_routes_substitution_requires_pact() -> None:
+    # 未缔约: 资源 1 < 造价 2, 不可建造
+    db = build_card_db()
+    p0 = _player(
+        "P0", civil_actions=4,
+        developed=_INITIAL_DEVELOPED + ("bronze",),
+        card_tokens={"bronze": 1, "agriculture": 2})
+    state = _state(players=(p0, _player("P1"), _player("P2")),
+                   phase=Phase.ACTION)
+    assert Build("bronze") not in legal_actions(db, state)
+
+
+def test_trade_routes_effect_starts_on_accept() -> None:
+    # 缔约(提议 -> 接受)后替换立即可用
+    db = build_card_db()
+    p0 = _player(
+        "P0", hand_military=("trade_routes_agreement",), civil_actions=4,
+        developed=_INITIAL_DEVELOPED + ("bronze",),
+        card_tokens={"bronze": 1, "agriculture": 2})
+    state = _state(players=(p0, _player("P1"), _player("P2")))
+    state = apply(state, ProposePact("trade_routes_agreement", 1, "A"), db)
+    state = apply(state, PactAccept(), db)
+    assert state.players[0].pacts == (("trade_routes_agreement", "A"),)
+    assert Build("bronze") in legal_actions(db, state)
+
+
+def test_trade_routes_not_used_when_resource_sufficient() -> None:
+    # SIMPLIFICATION: 主货币足够时不替换(官方为玩家主动选择), 食物不动
+    db = build_card_db()
+    state = _trade_routes_state(
+        "A", civil_actions=4,
+        developed=_INITIAL_DEVELOPED + ("bronze",),
+        card_tokens={"bronze": 2, "agriculture": 1})
+    new = apply(state, Build("bronze"), db)
+    p = new.players[0]
+    assert p.card_tokens == {"agriculture": 1}  # 正常付 2 资源
+    assert effects.TRADE_ROUTES_USED_KEY not in p.turn_discounts
+
+
+def test_trade_routes_once_per_turn() -> None:
+    # 本回合已用过替换(标记在) -> 差额 1 也不可再替换
+    db = build_card_db()
+    state = _trade_routes_state(
+        "A", civil_actions=4,
+        developed=_INITIAL_DEVELOPED + ("bronze",),
+        card_tokens={"bronze": 1, "agriculture": 2},
+        turn_discounts={effects.TRADE_ROUTES_USED_KEY: 1})
+    assert Build("bronze") not in legal_actions(db, state)
+
+
+def test_trade_routes_marker_resets_at_turn_end() -> None:
+    # 回合末行动点恢复时清空已用标记(下个回合可再替换)
+    db = build_card_db()
+    state = _trade_routes_state(
+        "A", civil_actions=4,
+        developed=_INITIAL_DEVELOPED + ("bronze",),
+        card_tokens={"bronze": 1, "agriculture": 2})
+    state = apply(state, Build("bronze"), db)
+    assert state.players[0].turn_discounts == {effects.TRADE_ROUTES_USED_KEY: 1}
+    new = turn.end_of_turn(state, db)
+    assert effects.TRADE_ROUTES_USED_KEY not in new.players[0].turn_discounts
+
+
+def test_trade_routes_side_b_resource_for_food() -> None:
+    # B 侧支付食物费(增人口费 2 食物), 食物差 1 -> 用 1 资源抵 1 食物
+    db = build_card_db()
+    state = _trade_routes_state(
+        "B", civil_actions=4, card_tokens={"agriculture": 1, "bronze": 2})
+    legal = legal_actions(db, state)
+    assert IncreasePopulation() in legal  # 食物 1 + 资源抵 1 >= 人口费 2
+    new = apply(state, IncreasePopulation(), db)
+    p = new.players[0]
+    assert p.card_tokens == {"bronze": 1}  # 付 1 食物 + 1 资源
+    assert p.turn_discounts == {effects.TRADE_ROUTES_USED_KEY: 1}
+    assert p.worker_pool == 2
+    assert p.yellow_bank == 17
+
+
+def test_trade_routes_side_a_does_not_help_food_payment() -> None:
+    # 替换方向由本方侧决定: A 侧(食->资)不能用于食物费用
+    db = build_card_db()
+    state = _trade_routes_state(
+        "A", civil_actions=4, card_tokens={"agriculture": 1, "bronze": 2})
+    assert IncreasePopulation() not in legal_actions(db, state)
+
+
+def test_trade_routes_effect_ends_on_cancel() -> None:
+    # 取缔条约后替换失效
+    db = build_card_db()
+    state = _trade_routes_state(
+        "A", civil_actions=4,
+        developed=_INITIAL_DEVELOPED + ("bronze",),
+        card_tokens={"bronze": 1, "agriculture": 2})
+    state = replace(state, phase=Phase.POLITICS)
+    state = apply(state, CancelPact("trade_routes_agreement"), db)
+    assert state.phase is Phase.ACTION
+    assert Build("bronze") not in legal_actions(db, state)
+
+
+# --- P3-T5: scientific_cooperation 研发折扣与对方付费 ------------------------------
+#
+# 卡牌数值表 v1.09 p3 条约表: "Discover a technology for -2科技, other player
+# pays 1科技"(Sym=Yes, 双方可用)。卡面无 "each turn" 字样 -> 不限次(对照
+# trade_routes 的 each turn); 对方支付为强制, 不足时扣到 0(下限 0)。仅
+# DevelopTech(政府变更不属 "discover a technology")。
+
+
+def _scientific_state(p1_science: int = 3, **p0_overrides: object) -> GameState:
+    """P0(A 侧)/P1(B 侧)缔约 scientific_cooperation 的 3 人局(ACTION 相位)."""
+    p0 = _player(
+        "P0", pacts=(("scientific_cooperation", "A"),), **p0_overrides)
+    p1 = _player(
+        "P1", science=p1_science, pacts=(("scientific_cooperation", "B"),))
+    return _state(players=(p0, p1, _player("P2")), phase=Phase.ACTION)
+
+
+def test_scientific_cooperation_discount_and_partner_pays() -> None:
+    # 研发法典(6 科技) -2 = 4; 结算时缔约对方 -1 科技
+    db = build_card_db()
+    state = _scientific_state(
+        hand_civil=("code_of_laws",), science=4, civil_actions=4)
+    legal = legal_actions(db, state)
+    assert DevelopTech("code_of_laws") in legal
+    new = apply(state, DevelopTech("code_of_laws"), db)
+    assert new.players[0].science == 0
+    assert "code_of_laws" in new.players[0].developed
+    assert new.players[1].science == 2  # 对方支付 1 科技
+
+
+def test_scientific_cooperation_requires_pact() -> None:
+    # 未缔约: 科技 4 < 法典 6, 不可研发
+    db = build_card_db()
+    p0 = _player("P0", hand_civil=("code_of_laws",), science=4, civil_actions=4)
+    state = _state(players=(p0, _player("P1"), _player("P2")),
+                   phase=Phase.ACTION)
+    assert DevelopTech("code_of_laws") not in legal_actions(db, state)
+
+
+def test_scientific_cooperation_partner_pays_floors_at_zero() -> None:
+    # 对方科技不足 1 时仍生效, 扣到 0(下限 0)
+    db = build_card_db()
+    state = _scientific_state(
+        0, hand_civil=("code_of_laws",), science=4, civil_actions=4)
+    new = apply(state, DevelopTech("code_of_laws"), db)
+    assert new.players[0].science == 0
+    assert new.players[1].science == 0
+
+
+def test_scientific_cooperation_not_limited_per_turn() -> None:
+    # 卡面无 "each turn" -> 一回合多次研发均享折扣, 对方每次都付 1 科技
+    db = build_card_db()
+    state = _scientific_state(
+        5, hand_civil=("code_of_laws", "warfare"), science=10, civil_actions=4)
+    state = apply(state, DevelopTech("code_of_laws"), db)  # 10 - (6-2) = 6
+    assert state.players[0].science == 6
+    assert state.players[1].science == 4
+    assert DevelopTech("warfare") in legal_actions(db, state)
+    state = apply(state, DevelopTech("warfare"), db)  # 6 - (5-2) = 3
+    assert state.players[0].science == 3
+    assert state.players[1].science == 3  # 对方再付 1
+
+
+def test_scientific_cooperation_pending_develop_tech() -> None:
+    # develop_tech pending 子行动同口径: 折扣适用, 对方仍付 1 科技
+    db = build_card_db()
+    state = _scientific_state(
+        hand_civil=("code_of_laws",), science=4, civil_actions=4)
+    pending = PendingEffect(effects.KIND_DEVELOP_TECH, 0)
+    state = replace(state, pending=(pending,))
+    legal = legal_actions(db, state)
+    assert DevelopTech("code_of_laws") in legal
+    new = apply(state, DevelopTech("code_of_laws"), db)
+    assert new.pending == ()
+    assert new.players[0].science == 0
+    assert new.players[1].science == 2
+
+
+def test_scientific_cooperation_effect_ends_on_cancel() -> None:
+    # 取缔条约后折扣与对方付费均失效
+    db = build_card_db()
+    state = _scientific_state(
+        hand_civil=("code_of_laws",), science=4, civil_actions=4)
+    state = replace(state, phase=Phase.POLITICS)
+    state = apply(state, CancelPact("scientific_cooperation"), db)
+    assert DevelopTech("code_of_laws") not in legal_actions(db, state)

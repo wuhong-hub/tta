@@ -53,7 +53,6 @@ from tta.engine.actions import (
     TakeCard,
     Upgrade,
 )
-from tta.engine.economy import pay
 from tta.engine.enums import UNIT_CATEGORIES, Age, CardCategory, Phase
 from tta.engine.legal import ROW_COSTS, legal_actions, turn_discount_for
 from tta.engine.model import CardDB
@@ -300,10 +299,10 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
             p = _spend_point(p, military=True)
         else:
             p = _spend_civil(db, p, 1)
-    science_cost = (
-        max(0, card.cost_science - science_discount)
-        if free else card.cost_science
-    )
+    # scientific_cooperation 条约(对称, 双方可用): 研发科技费 -2,
+    # 卡面无 "each turn" -> 不限次(与 legal._develop_actions 同口径)
+    pact_discount = effects.scientific_cooperation_discount(p)
+    science_cost = max(0, card.cost_science - science_discount - pact_discount)
     p = replace(p, science=p.science - science_cost + science_gain,
                 developed=p.developed + (action.card_id,))
     if card.category is CardCategory.SPECIAL:
@@ -311,6 +310,16 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
         state, p = _replace_lower_special(db, state, p, action.card_id)
     # 研发即时收益(leonardo +1 资源 / newton 拿回白点 / justice_system +3 蓝点)
     p = effects.on_develop_tech_gains(db, p, action.card_id)
+    if pact_discount:
+        # scientific_cooperation: 缔约对方支付 1 科技(强制, 不足时扣到 0)
+        partner = effects.pact_partner_seat(
+            state.players, idx, effects.PACT_SCIENTIFIC_COOPERATION)
+        if partner is not None:
+            q = state.players[partner]
+            state = replace_player(
+                state, partner,
+                replace(q, science=max(
+                    0, q.science - effects.SCIENTIFIC_COOPERATION_PARTNER_COST)))
     return _update(state, idx, p)
 
 
@@ -357,7 +366,8 @@ def _build(db: CardDB, state: GameState, card_id: str) -> GameState:
             p = _spend_civil(db, p, 1)
     cost = max(
         0, card.build_cost - discount - turn_discount_for(p, card.category))
-    p = pay(db, p, "resource", cost)
+    # trade_routes A 侧: 资源不足且差额恰 1 时可用 1 食物抵(每回合一次)
+    p = effects.pay_with_trade_routes(db, p, "resource", cost)
     p = replace(p, worker_pool=p.worker_pool - 1)
     p = _add_worker(p, card.category, card_id, +1)
     return _update(state, idx, p)
@@ -378,7 +388,7 @@ def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
     diff = max(0, to_card.build_cost - from_card.build_cost)
     cost = max(
         0, diff - discount - turn_discount_for(p, from_card.category))
-    p = pay(db, p, "resource", cost)
+    p = effects.pay_with_trade_routes(db, p, "resource", cost)
     p = _add_worker(p, from_card.category, action.from_card_id, -1)
     p = _add_worker(p, to_card.category, action.to_card_id, +1)
     return _update(state, idx, p)
@@ -457,7 +467,8 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
         state = replace(state, pending=state.pending[1:])
     if not free:
         p = _spend_point(p, military=False)
-    p = pay(db, p, "resource", max(0, stages[stages_done] - discount))
+    p = effects.pay_with_trade_routes(
+        db, p, "resource", max(0, stages[stages_done] - discount))
     # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 仅从供给区盖 1 蓝点
     p = replace(p, blue_bank=p.blue_bank - 1)
     stages_done += 1

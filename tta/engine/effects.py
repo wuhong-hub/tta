@@ -308,19 +308,21 @@ def increase_population_cost(db: CardDB, p: PlayerState) -> int:
 
 
 def can_increase_population(db: CardDB, p: PlayerState) -> bool:
-    """能否增人口: 黄点银行非空且食物足够支付人口费."""
+    """能否增人口: 黄点银行非空且食物(含 trade_routes 替换)足够支付人口费."""
     if p.yellow_bank <= 0:
         return False
-    return economy.food_total(db, p) >= increase_population_cost(db, p)
+    food = economy.food_total(db, p) + trade_routes_substitution(db, p, "food")
+    return food >= increase_population_cost(db, p)
 
 
 def increase_population(db: CardDB, p: PlayerState) -> PlayerState:
     """增人口结算(共用): 支付食物费(含 moses 折扣), 黄点银行 -1, 空闲工人 +1.
 
     调用点: apply 的 IncreasePopulation 动作(另扣 1 白点)与 frugality
-    行动卡 handler(不扣行动点)。本函数不含行动点扣减。
+    行动卡 handler(不扣行动点)。本函数不含行动点扣减。食物费经
+    pay_with_trade_routes 结算(trade_routes B 侧可用 1 资源抵 1 食物)。
     """
-    p = economy.pay(db, p, "food", increase_population_cost(db, p))
+    p = pay_with_trade_routes(db, p, "food", increase_population_cost(db, p))
     return replace(p, yellow_bank=p.yellow_bank - 1,
                    worker_pool=p.worker_pool + 1)
 
@@ -344,6 +346,112 @@ def flexible_actions(db: CardDB, p: PlayerState) -> int:
     if p.turn_discounts.get(HAMMURABI_FLEX_KEY, 0):
         return 0
     return 1 if p.military_actions >= 1 else 0
+
+
+# --- 条约效果(P3-T5): trade_routes / scientific_cooperation -------------------------
+
+PACT_TRADE_ROUTES = "trade_routes_agreement"
+"""贸易路线协议(时代 I 对称条约)卡 id."""
+
+PACT_SCIENTIFIC_COOPERATION = "scientific_cooperation"
+"""科学合作(时代 II 对称条约)卡 id."""
+
+TRADE_ROUTES_USED_KEY = "trade_routes_used"
+"""turn_discounts 中 trade_routes 本回合替换已用标记的键(回合末清空)."""
+
+SCIENTIFIC_COOPERATION_DISCOUNT = 2
+"""scientific_cooperation: 研发科技费 -2(对称双方可用; 卡面无 each turn, 不限次)."""
+
+SCIENTIFIC_COOPERATION_PARTNER_COST = 1
+"""scientific_cooperation: 研发结算时缔约对方支付的科技(强制, 下限 0)."""
+
+# 本方侧 -> (主货币, 替换货币): A 侧付资源可用食物抵; B 侧付食物可用资源抵
+_TRADE_ROUTES_SUBSTITUTE: dict[str, tuple[str, str]] = {
+    "A": ("resource", "food"),
+    "B": ("food", "resource"),
+}
+
+
+def pact_partner_seat(
+    players: tuple[PlayerState, ...], idx: int, card_id: str,
+) -> int | None:
+    """同录同一条约卡 id 的另一玩家座位(缔约对方); 无则 None."""
+    for j, other in enumerate(players):
+        if j != idx and any(cid == card_id for cid, _ in other.pacts):
+            return j
+    return None
+
+
+def _kind_total(db: CardDB, p: PlayerState, kind: str) -> int:
+    if kind == "food":
+        return economy.food_total(db, p)
+    if kind == "resource":
+        return economy.resource_total(db, p)
+    msg = f'kind 须为 "food" 或 "resource", 收到 {kind!r}'
+    raise ValueError(msg)
+
+
+def trade_routes_substitute_kind(
+    db: CardDB, p: PlayerState, kind: str,
+) -> str | None:
+    """trade_routes: 支付 kind 费用时可垫付的对方货币种类; 不可替换返回 None.
+
+    卡牌数值表 v1.09 p3: A 侧 "Can use 1食物 instead of 1资源 each turn",
+    B 侧 "Can use 1资源 instead of 1食物 each turn"。每回合一次(已用标记存
+    turn_discounts, 回合末行动点恢复时清空); 替换货币须持有 >= 1。
+    """
+    for card_id, side in p.pacts:
+        if card_id != PACT_TRADE_ROUTES:
+            continue
+        primary, substitute = _TRADE_ROUTES_SUBSTITUTE[side]
+        if (kind == primary
+                and not p.turn_discounts.get(TRADE_ROUTES_USED_KEY, 0)
+                and _kind_total(db, p, substitute) >= 1):
+            return substitute
+        return None
+    return None
+
+
+def trade_routes_substitution(db: CardDB, p: PlayerState, kind: str) -> int:
+    """trade_routes 可垫付点数(0 或 1), legal 费用口径与 apply 同口径."""
+    return 1 if trade_routes_substitute_kind(db, p, kind) is not None else 0
+
+
+def pay_with_trade_routes(
+    db: CardDB, p: PlayerState, kind: str, amount: int,
+) -> PlayerState:
+    """economy.pay 入口包装: trade_routes 替换支付(legal/apply 支付统一口径).
+
+    SIMPLIFICATION: 官方为玩家主动选择是否替换; 引擎确定性口径仅当主货币
+    不足且差额恰为 1 时启用(替换 = 对方货币 1 点 + 主货币 amount-1 点两次
+    确定性 pay, 并写已用标记), 主货币足够时不替换(P4 可改显式选择);
+    其余情况与 economy.pay 完全一致。
+    """
+    substitute = (
+        trade_routes_substitute_kind(db, p, kind)
+        if 0 < amount == _kind_total(db, p, kind) + 1
+        else None
+    )
+    if substitute is None:
+        return economy.pay(db, p, kind, amount)
+    p = economy.pay(db, p, substitute, 1)
+    p = economy.pay(db, p, kind, amount - 1)
+    discounts = dict(p.turn_discounts)
+    discounts[TRADE_ROUTES_USED_KEY] = 1
+    return replace(p, turn_discounts=discounts)
+
+
+def scientific_cooperation_discount(p: PlayerState) -> int:
+    """研发科技(DevelopTech)的科技费折扣(scientific_cooperation: -2).
+
+    卡牌数值表 v1.09 p3: "Discover a technology for -2💡, other player pays
+    1💡"(对称, 双方可用)。卡面无 "each turn" 字样 -> 不限次(对照
+    trade_routes 的 each turn); 对方支付 1 科技为强制, 不足时扣到 0
+    (见 apply._develop_tech)。政府变更不属 "discover a technology", 不适用。
+    """
+    if any(cid == PACT_SCIENTIFIC_COOPERATION for cid, _ in p.pacts):
+        return SCIENTIFIC_COOPERATION_DISCOUNT
+    return 0
 
 
 _TECH_TAKE_CATEGORIES = (
