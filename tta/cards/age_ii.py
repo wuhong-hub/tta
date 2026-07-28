@@ -180,8 +180,8 @@ NAVIGATION = _special(
 ARCHITECTURE = _special(
     "architecture", "建筑学", "Architecture", SpecialType.CONSTRUCTION,
     6, (1, 2, 2),
-    "每个内政行动可建造奇迹的 3 个阶段; 建造/升级城市建筑每级少付 1 资源"
-    "(最多 2)(建造折扣与三阶段 P2-DEFERRED)。",
+    "每个内政行动可建造奇迹的至多 3 个阶段; 建造/升级城市建筑每级少付 "
+    "1 资源(最多 2; 级 = 时代序, 时代 A 计 0 级, 升级按双边折后差价)。",
 )
 
 SPECIALS: tuple[CardDefinition, ...] = (
@@ -238,9 +238,9 @@ WONDERS: tuple[CardDefinition, ...] = (
 
 WILLIAM_SHAKESPEARE = _leader(
     "william_shakespeare", "威廉·莎士比亚", "William Shakespeare",
-    "+1 笑脸; 每有一对图书馆与剧院, +2 文化; 若你有图书馆, 剧院少花 "
-    "1 内政行动与 1 资源, 反之亦然(配对文化已实现: 图书馆按已研发、剧院"
-    "按有工人卡; 折扣 P2-DEFERRED)。",
+    "+1 笑脸; 每有一对图书馆与剧院, +2 文化; 若你有图书馆, 研发剧院少花 "
+    "1 内政行动(研发折扣 P2-DEFERRED)且建造/升级剧院少花 1 资源, "
+    "反之亦然(配对文化已实现: 图书馆按已研发、剧院按有工人卡)。",
     handler="william_shakespeare",
 )
 
@@ -266,9 +266,8 @@ MAXIMILIEN_ROBESPIERRE = _leader(
 
 J_S_BACH = _leader(
     "j_s_bach", "约翰·塞巴斯蒂安·巴赫", "J.S. Bach",
-    "你的每个剧院 +1 文化; 剧院少花 2 内政行动; 每回合一次, 可用 1 内政"
-    "行动把任一城市建筑升级为同级或高一级的剧院(剧院折扣与升级能力 "
-    "P2-DEFERRED)。",
+    "你的每个剧院 +1 文化; 研发剧院科技少花 2 科技; 每回合一次, 可用 "
+    "1 内政行动把任一城市建筑升级为同级或高一级的剧院。",
     handler="j_s_bach",
 )
 

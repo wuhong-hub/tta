@@ -171,8 +171,8 @@ CARTOGRAPHY = _special(
 MASONRY = _special(
     "masonry", "石匠术", "Masonry", SpecialType.CONSTRUCTION,
     3, _ONE,
-    "每个内政行动可建造奇迹的 2 个阶段; 建造/升级城市建筑每级少付 1 资源"
-    "(最多 1)(建造折扣与双阶段 P2-DEFERRED)。",
+    "每个内政行动可建造奇迹的至多 2 个阶段; 建造/升级城市建筑每级少付 "
+    "1 资源(最多 1; 级 = 时代序, 时代 A 计 0 级, 升级按双边折后差价)。",
 )
 
 SPECIALS: tuple[CardDefinition, ...] = (

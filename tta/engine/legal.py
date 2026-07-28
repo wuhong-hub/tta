@@ -23,9 +23,17 @@ legal_actions(db, state) 枚举行动者的全部合法动作:
 
 pending 子行动(行动卡压入, 见 effects): 0 行动点, 费用享折扣(下限 0);
 breakthrough 的 develop_tech 子行动为 0 行动点全价研发手牌科技。
-回合修饰(turn_discounts): 目前仅兵种的 "unit_build" 建造折扣。
+回合修饰(turn_discounts): 兵种的 "unit_build" 建造折扣(homer/patriotism/
+churchill 等写入)与 bach 每回合一次特殊升级的已用标记("bach_upgrade")。
 选择类行动卡(如 reserves_i)按 effects.ACTION_OPTIONS 每个选项枚举一个
 PlayActionCard。
+
+建造折扣(P3-T6): shakespeare 图书馆/剧院配对 -1 资源; masonry 系列
+城市建筑建造/升级 min(级, max) 资源(级 = 时代序, A 计 0 级; 升级按双边
+折后差价); j_s_bach 研发剧院科技 -2 科技, 每回合一次 1 白点把任一城市
+建筑升级为同级或高一级剧院(以 Upgrade 动作特例枚举, 记次于
+turn_discounts); masonry 系列持有者的 BuildWonderStage 枚举 count 1..X
+(X = 2/3/4, 费用求和、蓝点逐阶段盖)。
 
 领袖钩子(Task 9): hammurabi 拿领袖牌 -1 白点; hammurabi 红点垫付白点
 (官方规则: 每回合一次, 1 红点抵 1 白点, 仅 TakeCard/DevelopTech/Build/
@@ -165,7 +173,11 @@ def _develop_actions(db: CardDB, p: PlayerState) -> list[Action]:
         card = db.get(card_id)
         if card.category not in _DEVELOP_CATEGORIES:
             continue
-        if p.science < max(0, card.cost_science - pact_discount):
+        # j_s_bach: 研发剧院科技 -2 科技(与 apply._develop_tech 同口径)
+        cost = max(
+            0, card.cost_science - pact_discount
+            - effects.theater_science_discount(db, p, card))
+        if p.science < cost:
             continue
         if card.category in UNIT_CATEGORIES:
             if p.military_actions >= 1:
@@ -228,7 +240,9 @@ def _build_actions(
         if placed >= developed.count(card_id):
             continue
         cost = max(
-            0, card.build_cost - discount - turn_discount_for(p, card.category))
+            0, card.build_cost - discount - turn_discount_for(p, card.category)
+            - effects.construction_urban_discount(db, p, card)
+            - effects.shakespeare_build_discount(db, p, card.category))
         if resources < cost:
             continue
         if card.category in URBAN_CATEGORIES and placed == 0:
@@ -282,9 +296,16 @@ def _upgrade_actions(
                 continue
             if slots.get(to_id, 0) >= developed.count(to_id):
                 continue
-            diff = max(0, to_card.build_cost - from_card.build_cost)
+            # masonry 系列: 升级按双边折后差价(官方规则书: 修饰应用于两侧)
+            diff = max(
+                0,
+                (to_card.build_cost
+                 - effects.construction_urban_discount(db, p, to_card))
+                - (from_card.build_cost
+                   - effects.construction_urban_discount(db, p, from_card)))
             cost = max(
-                0, diff - discount - turn_discount_for(p, from_card.category))
+                0, diff - discount - turn_discount_for(p, from_card.category)
+                - effects.shakespeare_build_discount(db, p, to_card.category))
             if resources < cost:
                 continue
             actions.append(Upgrade(from_id, to_id))
@@ -322,22 +343,80 @@ def _leader_actions(db: CardDB, p: PlayerState) -> list[Action]:
 def _wonder_actions(
     db: CardDB, p: PlayerState, point_cost: int = 1, discount: int = 0,
 ) -> list[Action]:
-    """BuildWonderStage 枚举. pending 子行动用 point_cost=0 + discount 调用."""
+    """BuildWonderStage 枚举. pending 子行动用 point_cost=0 + discount 调用.
+
+    masonry 系列(CONSTRUCTION 特殊科技): 一次动作可建最多 X 阶段
+    (X = 2/3/4, 见 effects.wonder_stages_per_action), 费用求和、蓝点
+    逐阶段盖, 枚举 count 1..X; pending 折扣子行动(engineering_genius)
+    卡面为 "one stage", 恒 count=1。
+    """
     if p.wonder_progress is None or p.civil_actions < point_cost:
         return []
     card_id, stages_done = p.wonder_progress
     stages = db.get(card_id).wonder_stages
-    if stages_done >= len(stages):
+    remaining = len(stages) - stages_done
+    if remaining <= 0:
         return []
-    # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 要求供给区蓝点 > 0
-    if p.blue_bank < 1:
-        return []
+    max_count = (
+        1 if discount
+        else min(effects.wonder_stages_per_action(db, p), remaining)
+    )
     # trade_routes A 侧: 资源费可用 1 食物抵 1 资源(同 _build_actions)
     resources = resource_total(db, p) + effects.trade_routes_substitution(
         db, p, "resource")
-    if resources < max(0, stages[stages_done] - discount):
+    actions: list[Action] = []
+    for count in range(1, max_count + 1):
+        # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 要求供给区蓝点 >= count
+        if p.blue_bank < count:
+            break
+        cost = max(0, sum(stages[stages_done:stages_done + count]) - discount)
+        if resources < cost:
+            break
+        actions.append(BuildWonderStage(count))
+    return actions
+
+
+def _bach_upgrade_actions(db: CardDB, p: PlayerState) -> list[Action]:
+    """j_s_bach 每回合一次: 1 白点把任一城市建筑升级为同级或高一级剧院.
+
+    以 Upgrade 动作特例枚举(apply 按 is_bach_upgrade 识别并记次于
+    turn_discounts); 资源费按升级差价规则(含 masonry 双边折后差价)。
+    """
+    if not effects.bach_upgrade_available(p):
         return []
-    return [BuildWonderStage()]
+    if p.civil_actions + effects.flexible_actions(db, p) < 1:
+        return []
+    actions: list[Action] = []
+    # trade_routes A 侧: 资源费可用 1 食物抵 1 资源(同 _upgrade_actions)
+    resources = resource_total(db, p) + effects.trade_routes_substitution(
+        db, p, "resource")
+    developed = list(p.developed)
+    for from_id in dict.fromkeys(developed):
+        from_card = db.get(from_id)
+        if from_card.category not in URBAN_CATEGORIES:
+            continue
+        slots = p.buildings.get(from_card.category.value, {})
+        if slots.get(from_id, 0) < 1:
+            continue
+        for to_id in dict.fromkeys(developed):
+            if to_id == from_id:
+                continue
+            to_card = db.get(to_id)
+            if not effects.bach_upgrade_target_ok(from_card, to_card):
+                continue
+            theater_slots = p.buildings.get(CardCategory.THEATER.value, {})
+            if theater_slots.get(to_id, 0) >= developed.count(to_id):
+                continue
+            diff = max(
+                0,
+                (to_card.build_cost
+                 - effects.construction_urban_discount(db, p, to_card))
+                - (from_card.build_cost
+                   - effects.construction_urban_discount(db, p, from_card)))
+            if resources < diff:
+                continue
+            actions.append(Upgrade(from_id, to_id))
+    return actions
 
 
 def _develop_tech_pending_actions(
@@ -353,10 +432,12 @@ def _develop_tech_pending_actions(
         card = db.get(card_id)
         if card.category not in _DEVELOP_CATEGORIES:
             continue
-        # scientific_cooperation 条约折扣同 _develop_actions 口径
+        # scientific_cooperation 条约折扣同 _develop_actions 口径;
+        # j_s_bach 研发剧院 -2 科技同 _develop_actions 口径
         cost = max(
             0, card.cost_science - discount
-            - effects.scientific_cooperation_discount(p))
+            - effects.scientific_cooperation_discount(p)
+            - effects.theater_science_discount(db, p, card))
         if p.science < cost:
             continue
         actions.append(DevelopTech(card_id))
@@ -732,6 +813,7 @@ def legal_actions(db: CardDB, state: GameState) -> list[Action]:
     actions.extend(_government_actions(db, p))
     actions.extend(_build_actions(db, p))
     actions.extend(_upgrade_actions(db, p))
+    actions.extend(_bach_upgrade_actions(db, p))
     actions.extend(_destroy_disband_actions(p))
     actions.extend(_leader_actions(db, p))
     actions.extend(_wonder_actions(db, p))

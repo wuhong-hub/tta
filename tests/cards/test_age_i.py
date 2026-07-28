@@ -311,7 +311,7 @@ def test_cartography_static_bonus(db: CardDB) -> None:
 
 
 def test_masonry_no_handler(db: CardDB) -> None:
-    """masonry: 建造折扣/双阶段 P2-DEFERRED, 无静态钩子."""
+    """masonry: 建造折扣/双阶段经 effects 费用钩子生效(P3-T6), 无静态钩子."""
     assert db.get("masonry").handler == ""
     assert effects.static_bonuses(db, _player(developed=("masonry",))) == {}
 

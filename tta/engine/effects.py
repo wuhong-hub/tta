@@ -39,7 +39,8 @@ Age A 领袖钩子(Task 9):
 - genghis_khan / christopher_columbus / frederick_barbarossa:
   互动能力(阵型/殖民/红点建军)P2-DEFERRED, 仅卡文本;
 - 特殊科技: warfare / code_of_laws / cartography 静态加成;
-  masonry 建造折扣与双阶段 P2-DEFERRED;
+  masonry 建造折扣与双阶段见 P3-T6 钩子(construction_urban_discount /
+  wonder_stages_per_action);
 - 奇迹: great_wall 经 static_bonuses 的奇迹 handler 维度提供
   每步兵/炮兵 +1 军力; st_peters_basilica 他文明笑脸与 taj_mahal
   蓝点/换领袖折扣 P2-DEFERRED。
@@ -55,13 +56,15 @@ Age A 领袖钩子(Task 9):
   leonardo 口径); on_develop_tech_gains 在 apply DevelopTech 结算时
   拿回 1 白点;
 - william_shakespeare: STATIC_BONUS(+1 笑脸 + 每对图书馆-剧院 +2 文化,
-  T13; 配对口径: 图书馆按已研发、剧院按有工人卡); 图书馆/剧院折扣
-  P2-DEFERRED; james_cook 殖民与弃军事牌 P2-DEFERRED, 仅卡文本;
-- j_s_bach: STATIC_BONUS(每个有工人剧院 +1 文化, T13); 剧院折扣与升级
-  能力 P2-DEFERRED, 仅卡文本;
+  T13; 配对口径: 图书馆按已研发、剧院按有工人卡); 图书馆/剧院配对建造
+  折扣 -1 资源(P3-T6, 见 shakespeare_build_discount; 研发 -1 白点
+  P2-DEFERRED); james_cook 殖民与弃军事牌 P2-DEFERRED, 仅卡文本;
+- j_s_bach: STATIC_BONUS(每个有工人剧院 +1 文化, T13); 研发剧院 -2 科技
+  与每回合一次特殊升级(P3-T6, 见 theater_science_discount /
+  bach_upgrade_available);
 - 特殊科技: strategy / justice_system / navigation 静态加成;
   justice_system 研发时 +3 蓝点(on_develop_tech_gains 按卡 id);
-  architecture 建造折扣与三阶段 P2-DEFERRED;
+  architecture 建造折扣与三阶段(P3-T6, 同 masonry 口径);
 - 奇迹: transcontinental_railroad 最佳矿场翻倍与 ocean_liner_service
   免费增人口 P2-DEFERRED; kremlin 的 -1 笑脸经 wonder_bonus 静态生效。
 
@@ -83,7 +86,7 @@ Age A 领袖钩子(Task 9):
   +3 文化, 或 +3 科技 + 本回合军事建造折扣 3;
 - 特殊科技: military_theory / civil_service / satellites 静态加成;
   civil_service 研发时 +3 蓝点(on_develop_tech_gains 按卡 id);
-  engineering 建造折扣与四阶段 P2-DEFERRED;
+  engineering 建造折扣与四阶段(P3-T6, 同 masonry 口径);
 - 奇迹: internet(城市建筑每 1 科技/文化产出 +1 文化)、
   first_space_flight(每项已研发科技每级 +1 文化)、
   fast_food_chains(农场/矿场每卡 +2 文化, 城市建筑/兵种每卡 +1 文化)
@@ -399,6 +402,10 @@ def trade_routes_substitute_kind(
     卡牌数值表 v1.09 p3: A 侧 "Can use 1食物 instead of 1资源 each turn",
     B 侧 "Can use 1资源 instead of 1食物 each turn"。每回合一次(已用标记存
     turn_discounts, 回合末行动点恢复时清空); 替换货币须持有 >= 1。
+
+    唯一性前提: 官方规则每方至多参与一项条约(politics.propose_pact 接受
+    新约时既有约失效), 故 p.pacts 中 trade_routes 至多一条, 循环命中即
+    返回不遗漏。
     """
     for card_id, side in p.pacts:
         if card_id != PACT_TRADE_ROUTES:
@@ -671,7 +678,7 @@ def _shakespeare_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
 
     配对口径(SIMPLIFICATION): 图书馆按已研发卡计(同 leonardo 口径), 剧院
     按有工人的卡计(同 chaplin 口径); 对数 = min(图书馆数, 剧院数)。
-    图书馆/剧院折扣(各 -1 白点 -1 资源)P2-DEFERRED。
+    图书馆/剧院配对建造折扣见 shakespeare_build_discount(P3-T6)。
     """
     libraries = sum(
         1
@@ -688,7 +695,7 @@ def _shakespeare_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
 def _bach_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
     """j_s_bach: 每个剧院 +1 文化(PDF 第 2 页; 有工人的卡, 同 chaplin 口径).
 
-    剧院折扣(-2 白点)与每回合升级任一城市建筑为剧院的能力 P2-DEFERRED。
+    剧院研发折扣(-2 科技)与每回合升级能力见下方 P3-T6 钩子。
     """
     theaters = _theater_count(p)
     return {"culture": theaters} if theaters else {}
@@ -704,6 +711,142 @@ STATIC_BONUS_HANDLERS.update({
     "justice_system": _justice_system_bonus,
     "navigation": _navigation_bonus,
 })
+
+
+# --- 建造/研发折扣与奇迹多阶段钩子(P3-T6) ------------------------------------------
+
+SHAKESPEARE_BUILD_DISCOUNT = 1
+"""shakespeare: 图书馆/剧院配对时建造/升级对方的资源费折扣(PDF 第 2 页)."""
+
+BACH_THEATER_SCIENCE_DISCOUNT = 2
+"""j_s_bach: 研发剧院科技的科技费折扣(PDF 第 2 页, 图标为科技)."""
+
+BACH_UPGRADE_KEY = "bach_upgrade"
+"""turn_discounts 中 bach 每回合一次特殊升级已用标记的键(回合末清空)."""
+
+# masonry 系列(特殊科技 CONSTRUCTION): 卡 id -> 每白点可建奇迹阶段数
+CONSTRUCTION_STAGES_PER_ACTION = {
+    "masonry": 2, "architecture": 3, "engineering": 4,
+}
+"""PDF 第 1 页 Construction 区: "2/3/4 stages per ⚪"."""
+
+CONSTRUCTION_URBAN_MAX = {"masonry": 1, "architecture": 2, "engineering": 3}
+"""PDF 第 1 页 Construction 区: 城市建筑折扣上限 "(max 1/2/3)"."""
+
+_CONSTRUCTION_LEVEL = {Age.A: 0, Age.I: 1, Age.II: 2, Age.III: 3}
+"""城市建筑建造折扣的"级" = 时代序(A 计 0 级).
+
+官方规则书 "Construction Technologies and Upgrading Urban Buildings" 例:
+masonry 下时代 A 实验室仍全价(0 级无折扣), 时代 I -1; 与 _TECH_LEVEL
+(A=1) 口径不同, 勿混用。
+"""
+
+
+def shakespeare_build_discount(
+    db: CardDB, p: PlayerState, category: CardCategory,
+) -> int:
+    """shakespeare 配对建造/升级资源折扣(0 或 1, 同类型多卡不叠加).
+
+    PDF 第 2 页: 有图书馆时剧院建造 -1 资源, 反之亦然。配对条件按已研发
+    卡计(图书馆与剧院均取 developed, 一次动作至多 -1)。研发时的 -1 内政
+    行动折扣 P2-DEFERRED(见报告)。
+    """
+    if p.leader != LEADER_SHAKESPEARE:
+        return 0
+    if category is CardCategory.THEATER:
+        pair = CardCategory.LIBRARY
+    elif category is CardCategory.LIBRARY:
+        pair = CardCategory.THEATER
+    else:
+        return 0
+    has_pair = any(
+        db.get(card_id).category is pair for card_id in p.developed)
+    return SHAKESPEARE_BUILD_DISCOUNT if has_pair else 0
+
+
+def theater_science_discount(db: CardDB, p: PlayerState, card: CardDefinition) -> int:
+    """研发科技的科技费折扣(j_s_bach: 剧院科技 -2, PDF 图标为科技).
+
+    挂钩于 legal/apply 的 DevelopTech(含 develop_tech pending 子行动),
+    与 scientific_cooperation 折扣叠加。
+    """
+    if p.leader == LEADER_BACH and card.category is CardCategory.THEATER:
+        return BACH_THEATER_SCIENCE_DISCOUNT
+    return 0
+
+
+def bach_upgrade_available(p: PlayerState) -> bool:
+    """j_s_bach 每回合一次特殊升级是否可用(本回合未用)."""
+    return (p.leader == LEADER_BACH
+            and not p.turn_discounts.get(BACH_UPGRADE_KEY, 0))
+
+
+def bach_upgrade_target_ok(
+    from_card: CardDefinition, to_card: CardDefinition,
+) -> bool:
+    """bach 特殊升级目标合法性: 任一城市建筑 -> 同级或高一级剧院.
+
+    "级" = 时代序(_TECH_LEVEL 口径, A=1); 源不可已为剧院(剧院间升级走
+    普通 Upgrade, 不占用每回合一次)。
+    """
+    if from_card.category not in URBAN_CATEGORIES:
+        return False
+    if from_card.category is CardCategory.THEATER:
+        return False
+    if to_card.category is not CardCategory.THEATER:
+        return False
+    diff = _TECH_LEVEL[to_card.age] - _TECH_LEVEL[from_card.age]
+    return diff in (0, 1)
+
+
+def is_bach_upgrade(from_card: CardDefinition, to_card: CardDefinition) -> bool:
+    """Upgrade 是否为 bach 特殊升级(跨类别到剧院; apply 记次用).
+
+    普通升级限同类别, 故"目标剧院且源非剧院"的 Upgrade 必为 bach 升级
+    (合法性由 legal 枚举保证)。
+    """
+    return (to_card.category is CardCategory.THEATER
+            and from_card.category is not CardCategory.THEATER)
+
+
+def _construction_card_id(db: CardDB, p: PlayerState) -> str | None:
+    """玩家已研发的 CONSTRUCTION 特殊科技卡 id; 无则 None.
+
+    同类型特殊科技并存时低级者立即移除(apply._replace_lower_special),
+    故至多一张; 防御性取每白点阶段数最高者。
+    """
+    found = [
+        card_id for card_id in p.developed
+        if card_id in CONSTRUCTION_STAGES_PER_ACTION
+    ]
+    if not found:
+        return None
+    return max(found, key=lambda cid: CONSTRUCTION_STAGES_PER_ACTION[cid])
+
+
+def wonder_stages_per_action(db: CardDB, p: PlayerState) -> int:
+    """一次 BuildWonderStage 动作(1 白点)可建的最多奇迹阶段数(1/2/3/4)."""
+    card_id = _construction_card_id(db, p)
+    if card_id is None:
+        return 1
+    return CONSTRUCTION_STAGES_PER_ACTION[card_id]
+
+
+def construction_urban_discount(
+    db: CardDB, p: PlayerState, card: CardDefinition,
+) -> int:
+    """城市建筑建造/升级的资源费折扣 = min(卡级, max)(masonry 系列).
+
+    "级" = 时代序(A 计 0 级, 见 _CONSTRUCTION_LEVEL); 升级按双边折后差价
+    (官方规则书: "apply the card's modifiers to both costs")。
+    """
+    if card.category not in URBAN_CATEGORIES:
+        return 0
+    card_id = _construction_card_id(db, p)
+    if card_id is None:
+        return 0
+    return min(
+        _CONSTRUCTION_LEVEL[card.age], CONSTRUCTION_URBAN_MAX[card_id])
 
 
 # --- 时代 III 领袖/特殊科技/奇迹钩子(Task 12) ------------------------------------

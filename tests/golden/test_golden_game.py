@@ -23,6 +23,12 @@ P3-T3 回填说明(2026-07-28): 弃多余军事牌决策由"整个回合末流�
 resume 续跑)——响应者弃牌候选不再含新抓牌, 轨迹重排 ->
 steps 213 -> 197, rounds 21 -> 20, 终局 hash 变化;
 scores/winners 不变。
+
+P3-T6 回填说明(2026-07-28): shakespeare 配对建造折扣、bach 剧院研发
+折扣与每回合特殊升级(新增跨类别 Upgrade 枚举)、masonry 系列奇迹多阶段
+(BuildWonderStage count)与城市建筑折扣, 改变随机玩家合法动作空间与
+费用门槛, 轨迹重排 -> steps 197 -> 202, 终局 hash 变化;
+scores/winners/rounds 不变。
 """
 
 from tta.agents.random_agent import RandomPlayer
@@ -36,9 +42,9 @@ from tta.orchestrator.runner import run_game
 GOLDEN_SCORES = (0, 0)
 GOLDEN_WINNERS = (0, 1)
 GOLDEN_ROUNDS = 20
-GOLDEN_STEPS = 197
+GOLDEN_STEPS = 202
 GOLDEN_FINAL_STATE_HASH = (
-    "9ec25a18dbc71f8a8aeca77d5e6b127e82cb7b5b00ca08e45180e20ed3cacb07"
+    "c399ac25992815139bbe64fb28a78029e9e15a8597adb29eda94c7fc097ecda7"
 )
 
 

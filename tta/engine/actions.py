@@ -63,7 +63,14 @@ class PlayLeader:
 
 @dataclass(frozen=True)
 class BuildWonderStage:
-    """建奇迹下一阶段: 1 白点 + 左起下一未付阶段费, 蓝点从供给区盖上."""
+    """建奇迹阶段: 1 白点 + 左起未付阶段费(求和), 蓝点从供给区逐阶段盖上.
+
+    count: 本次动作建造的阶段数(默认 1); 拥有 CONSTRUCTION 特殊科技
+    (masonry/architecture/engineering)时一次动作可建最多 2/3/4 阶段
+    (见 effects.wonder_stages_per_action)。
+    """
+
+    count: int = 1
 
 
 @dataclass(frozen=True)

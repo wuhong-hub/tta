@@ -147,7 +147,7 @@ def apply(state: GameState, action: Action, db: CardDB) -> GameState:
     if isinstance(action, PlayLeader):
         return _play_leader(db, state, action)
     if isinstance(action, BuildWonderStage):
-        return _build_wonder_stage(db, state)
+        return _build_wonder_stage(db, state, action.count)
     if isinstance(action, PlayActionCard):
         return _play_action_card(db, state, action)
     if isinstance(action, DiscardMilitary):
@@ -300,9 +300,12 @@ def _develop_tech(db: CardDB, state: GameState, action: DevelopTech) -> GameStat
         else:
             p = _spend_civil(db, p, 1)
     # scientific_cooperation 条约(对称, 双方可用): 研发科技费 -2,
-    # 卡面无 "each turn" -> 不限次(与 legal._develop_actions 同口径)
+    # 卡面无 "each turn" -> 不限次(与 legal._develop_actions 同口径);
+    # j_s_bach: 研发剧院科技 -2 科技(与 legal._develop_actions 同口径)
     pact_discount = effects.scientific_cooperation_discount(p)
-    science_cost = max(0, card.cost_science - science_discount - pact_discount)
+    science_cost = max(
+        0, card.cost_science - science_discount - pact_discount
+        - effects.theater_science_discount(db, p, card))
     p = replace(p, science=p.science - science_cost + science_gain,
                 developed=p.developed + (action.card_id,))
     if card.category is CardCategory.SPECIAL:
@@ -365,7 +368,9 @@ def _build(db: CardDB, state: GameState, card_id: str) -> GameState:
         else:
             p = _spend_civil(db, p, 1)
     cost = max(
-        0, card.build_cost - discount - turn_discount_for(p, card.category))
+        0, card.build_cost - discount - turn_discount_for(p, card.category)
+        - effects.construction_urban_discount(db, p, card)
+        - effects.shakespeare_build_discount(db, p, card.category))
     # trade_routes A 侧: 资源不足且差额恰 1 时可用 1 食物抵(每回合一次)
     p = effects.pay_with_trade_routes(db, p, "resource", cost)
     p = replace(p, worker_pool=p.worker_pool - 1)
@@ -385,10 +390,21 @@ def _upgrade(db: CardDB, state: GameState, action: Upgrade) -> GameState:
             p = _spend_point(p, military=True)
         else:
             p = _spend_civil(db, p, 1)
-    diff = max(0, to_card.build_cost - from_card.build_cost)
+    diff = max(
+        0,
+        (to_card.build_cost
+         - effects.construction_urban_discount(db, p, to_card))
+        - (from_card.build_cost
+           - effects.construction_urban_discount(db, p, from_card)))
     cost = max(
-        0, diff - discount - turn_discount_for(p, from_card.category))
+        0, diff - discount - turn_discount_for(p, from_card.category)
+        - effects.shakespeare_build_discount(db, p, to_card.category))
     p = effects.pay_with_trade_routes(db, p, "resource", cost)
+    if effects.is_bach_upgrade(from_card, to_card):
+        # j_s_bach 每回合一次特殊升级(跨类别到剧院): 记次, 回合末清空
+        discounts = dict(p.turn_discounts)
+        discounts[effects.BACH_UPGRADE_KEY] = 1
+        p = replace(p, turn_discounts=discounts)
     p = _add_worker(p, from_card.category, action.from_card_id, -1)
     p = _add_worker(p, to_card.category, action.to_card_id, +1)
     return _update(state, idx, p)
@@ -453,7 +469,15 @@ def _play_leader(db: CardDB, state: GameState, action: PlayLeader) -> GameState:
     return _update(state, idx, p)
 
 
-def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
+def _build_wonder_stage(
+    db: CardDB, state: GameState, count: int = 1,
+) -> GameState:
+    """建 count 个奇迹阶段: 1 白点 + 阶段费求和, 蓝点逐阶段从供给区盖.
+
+    count > 1 仅当持有 CONSTRUCTION 特殊科技(masonry 系列, 上限由
+    legal 按 effects.wonder_stages_per_action 枚举保证); pending 折扣
+    子行动(engineering_genius, 卡面 "one stage")恒 count=1。
+    """
     idx = acting_index(state)
     p = state.players[idx]
     if p.wonder_progress is None:  # pragma: no cover - legal 已排除
@@ -467,11 +491,12 @@ def _build_wonder_stage(db: CardDB, state: GameState) -> GameState:
         state = replace(state, pending=state.pending[1:])
     if not free:
         p = _spend_point(p, military=False)
+    total = sum(stages[stages_done:stages_done + count])
     p = effects.pay_with_trade_routes(
-        db, p, "resource", max(0, stages[stages_done] - discount))
-    # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 仅从供给区盖 1 蓝点
-    p = replace(p, blue_bank=p.blue_bank - 1)
-    stages_done += 1
+        db, p, "resource", max(0, total - discount))
+    # SIMPLIFICATION: 官方规则允许动用卡上蓝点, P1 仅从供给区逐阶段盖
+    p = replace(p, blue_bank=p.blue_bank - count)
+    stages_done += count
     if stages_done == len(stages):
         # 官方规则: 奇迹完成时盖在阶段上的蓝点全部放回供给区
         p = replace(p, wonders=p.wonders + (card_id,), wonder_progress=None,

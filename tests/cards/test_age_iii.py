@@ -342,7 +342,7 @@ def test_satellites_static_bonus(db: CardDB) -> None:
 
 
 def test_engineering_no_handler(db: CardDB) -> None:
-    """engineering: 建造折扣/四阶段 P2-DEFERRED, 无静态钩子."""
+    """engineering: 建造折扣/四阶段经 effects 费用钩子生效(P3-T6), 无静态钩子."""
     assert db.get("engineering").handler == ""
     assert effects.static_bonuses(db, _player(developed=("engineering",))) == {}
 

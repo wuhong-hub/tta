@@ -18,6 +18,7 @@ from tta.cards import build_card_db
 from tta.engine import effects
 from tta.engine.actions import (
     Build,
+    BuildWonderStage,
     DevelopGovernment,
     DevelopTech,
     IllegalActionError,
@@ -359,7 +360,7 @@ def test_navigation_static_bonus(db: CardDB) -> None:
 
 
 def test_architecture_no_handler(db: CardDB) -> None:
-    """architecture: 建造折扣/三阶段 P2-DEFERRED, 无静态钩子."""
+    """architecture: 建造折扣/三阶段经 effects 费用钩子生效(P3-T6), 无静态钩子."""
     assert db.get("architecture").handler == ""
     assert effects.static_bonuses(db, _player(developed=("architecture",))) == {}
 
@@ -459,7 +460,7 @@ def test_newton_develop_tech_gets_civil_action_back(db: CardDB) -> None:
 
 
 def test_shakespeare_static_happiness(db: CardDB) -> None:
-    """william_shakespeare: +1 笑脸(静态, T12 审查补登); 折扣仍 P2."""
+    """william_shakespeare: +1 笑脸(静态, T12 审查补登); 研发 -1 白点仍 P2."""
     p = _player(leader="william_shakespeare")
     assert effects.static_bonuses(db, p) == {"happiness": 1}
     civ = civ_values(db, p)
@@ -500,7 +501,7 @@ def test_shakespeare_pair_culture(db: CardDB) -> None:
 
 
 def test_bach_static_culture_per_theater(db: CardDB) -> None:
-    """j_s_bach: 每个剧院 +1 文化(T13, PDF 第 2 页); 折扣/升级仍 P2.
+    """j_s_bach: 每个剧院 +1 文化(T13, PDF 第 2 页); 折扣/升级见专项测试.
 
     剧院按有工人的卡计(同 chaplin 口径, 每卡 1 次与工人数无关)。
     """
@@ -511,7 +512,7 @@ def test_bach_static_culture_per_theater(db: CardDB) -> None:
     civ = civ_values(db, p)
     # 剧院自身文化(drama 2×2 + opera 3×1) + bach 2
     assert civ.culture_rate == (2 * 2 + 3 * 1) + 2
-    assert "P2-DEFERRED" in db.get("j_s_bach").text
+    assert "P2-DEFERRED" not in db.get("j_s_bach").text
 
 
 def test_cook_deferred(db: CardDB) -> None:
@@ -692,3 +693,264 @@ def test_wave_of_nationalism_ii_three_players(db: CardDB) -> None:
     new2 = apply(_state(strong, p1, p2),
                  PlayActionCard("wave_of_nationalism_ii"), db)
     assert new2.players[0].turn_discounts == {}
+
+
+# --- shakespeare 图书馆/剧院配对折扣(P3-T6) -------------------------------------
+
+
+def test_shakespeare_theater_discount_with_library(db: CardDB) -> None:
+    """shakespeare: 有已研发图书馆时, 建造剧院 -1 资源(PDF 第 2 页).
+
+    drama 造价 4 -> 付 3; 多张图书馆不叠加(一次 -1)。
+    """
+    p = _player(leader="william_shakespeare",
+                developed=("printing_press", "journalism", "drama", "bronze"),
+                worker_pool=1, card_tokens={"bronze": 5}, blue_bank=16)
+    state = _state(p)
+    assert Build("drama") in legal_actions(db, state)
+    new = apply(state, Build("drama"), db)
+    assert new.players[0].card_tokens == {"bronze": 2}
+
+
+def test_shakespeare_library_discount_with_theater(db: CardDB) -> None:
+    """shakespeare: 有已研发剧院时, 建造图书馆 -1 资源(vice versa)."""
+    p = _player(leader="william_shakespeare",
+                developed=("drama", "printing_press", "bronze"),
+                worker_pool=1, card_tokens={"bronze": 3}, blue_bank=16)
+    # printing_press 造价 3 - 1 = 2
+    new = apply(_state(p), Build("printing_press"), db)
+    assert new.players[0].card_tokens == {"bronze": 1}
+
+
+def test_shakespeare_upgrade_discount(db: CardDB) -> None:
+    """shakespeare: 升级剧院(有图书馆)差价 -1; drama->opera 差 4 -> 付 3."""
+    p = _player(leader="william_shakespeare",
+                developed=("printing_press", "drama", "opera", "bronze"),
+                buildings={"theater": {"drama": 1}},
+                card_tokens={"bronze": 3}, blue_bank=16)
+    state = _state(p)
+    assert Upgrade("drama", "opera") in legal_actions(db, state)
+    new = apply(state, Upgrade("drama", "opera"), db)
+    assert new.players[0].card_tokens == {}
+    assert new.players[0].buildings["theater"] == {"opera": 1}
+
+
+def test_shakespeare_no_discount_without_pair(db: CardDB) -> None:
+    """shakespeare: 无配对类别(图书馆未研发)时无折扣; 非 shakespeare 无折扣."""
+    p = _player(leader="william_shakespeare",
+                developed=("drama", "bronze"),
+                worker_pool=1, card_tokens={"bronze": 4}, blue_bank=16)
+    new = apply(_state(p), Build("drama"), db)
+    assert new.players[0].card_tokens == {}  # 全价 4
+    p2 = _player(developed=("printing_press", "drama", "bronze"),
+                 worker_pool=1, card_tokens={"bronze": 4}, blue_bank=16)
+    new2 = apply(_state(p2), Build("drama"), db)
+    assert new2.players[0].card_tokens == {}  # 无领袖, 全价 4
+
+
+# --- j_s_bach 剧院研发折扣与每回合升级(P3-T6) ------------------------------------
+
+
+def test_bach_theater_science_discount(db: CardDB) -> None:
+    """j_s_bach: 研发剧院科技 -2 科技(PDF 第 2 页图标为科技).
+
+    drama 研发费 3 -> 付 1; 非剧院科技无折扣。
+    """
+    p = _player(leader="j_s_bach", hand_civil=("drama", "irrigation"),
+                science=3)
+    state = _state(p)
+    assert DevelopTech("drama") in legal_actions(db, state)
+    new = apply(state, DevelopTech("drama"), db)
+    assert new.players[0].science == 2  # 3 - (3 - 2)
+    # 折扣后科技不足也可研发: science=1 即可研发 drama
+    p2 = _player(leader="j_s_bach", hand_civil=("drama",), science=1)
+    assert DevelopTech("drama") in legal_actions(db, _state(p2))
+    # 非剧院科技(irrigation 3 科技)无折扣: science=2 不可研发
+    p3 = _player(leader="j_s_bach", hand_civil=("irrigation",), science=2)
+    assert DevelopTech("irrigation") not in legal_actions(db, _state(p3))
+
+
+def test_bach_upgrade_same_level(db: CardDB) -> None:
+    """j_s_bach: 1 白点把城市建筑升级为同级剧院(每回合一次).
+
+    organized_religion(时代 II 寺庙, 造价 7) -> opera(时代 II 剧院, 造价 8):
+    差价 1; 结算后 turn_discounts 记 bach_upgrade。
+    """
+    p = _player(leader="j_s_bach",
+                developed=("religion", "organized_religion", "drama", "opera",
+                           "bronze"),
+                buildings={"temple": {"religion": 1, "organized_religion": 1}},
+                card_tokens={"bronze": 2}, blue_bank=16)
+    state = _state(p)
+    action = Upgrade("organized_religion", "opera")
+    assert action in legal_actions(db, state)
+    new = apply(state, action, db)
+    p0 = new.players[0]
+    assert p0.buildings["temple"] == {"religion": 1}
+    assert p0.buildings["theater"] == {"opera": 1}
+    assert p0.card_tokens == {"bronze": 1}  # 差价 8 - 7 = 1
+    assert p0.civil_actions == 3  # 1 白点
+    assert p0.turn_discounts == {effects.BACH_UPGRADE_KEY: 1}
+    # 每回合一次: 本回合另一城市建筑不可再 bach 升级为剧院
+    assert Upgrade("religion", "drama") not in legal_actions(db, new)
+
+
+def test_bach_upgrade_one_level_higher(db: CardDB) -> None:
+    """j_s_bach: 可升级为高一级剧院(religion A -> drama I); +2 级不可."""
+    p = _player(leader="j_s_bach",
+                developed=("religion", "drama", "opera", "bronze"),
+                buildings={"temple": {"religion": 1}},
+                card_tokens={"bronze": 5}, blue_bank=16)
+    legal = legal_actions(db, _state(p))
+    # religion(时代 A) -> drama(时代 I): +1 级, 合法
+    assert Upgrade("religion", "drama") in legal
+    # religion(时代 A) -> opera(时代 II): +2 级, 不合法
+    assert Upgrade("religion", "opera") not in legal
+    new = apply(_state(p), Upgrade("religion", "drama"), db)
+    assert new.players[0].card_tokens == {"bronze": 4}  # 差价 4 - 3 = 1
+
+
+def test_bach_upgrade_requires_bach_and_target_slot(db: CardDB) -> None:
+    """跨类别升级为剧院仅 bach 可用; 目标剧院须已研发且有空槽."""
+    # 无 bach: religion -> drama 不合法(跨类别)
+    p = _player(developed=("religion", "drama", "bronze"),
+                buildings={"temple": {"religion": 1}},
+                card_tokens={"bronze": 5}, blue_bank=16)
+    assert Upgrade("religion", "drama") not in legal_actions(db, _state(p))
+    # bach 但剧院未研发: 不合法
+    p2 = _player(leader="j_s_bach",
+                 developed=("religion", "bronze"),
+                 buildings={"temple": {"religion": 1}},
+                 card_tokens={"bronze": 5}, blue_bank=16)
+    assert Upgrade("religion", "drama") not in legal_actions(db, _state(p2))
+
+
+# --- masonry 系列: 奇迹多阶段 + 城市建筑折扣(P3-T6) -------------------------------
+
+
+def test_masonry_wonder_two_stages(db: CardDB) -> None:
+    """masonry: 1 白点可建最多 2 个奇迹阶段(费用求和, 蓝点逐阶段盖).
+
+    pyramids 阶段 (3, 2, 1): BuildWonderStage(2) 付 3+2=5, 盖 2 蓝点。
+    """
+    p = _player(developed=("masonry", "bronze"),
+                wonder_progress=("pyramids", 0),
+                card_tokens={"bronze": 6}, blue_bank=16)
+    state = _state(p)
+    legal = legal_actions(db, state)
+    assert BuildWonderStage(2) in legal
+    assert BuildWonderStage(1) in legal
+    assert BuildWonderStage() == BuildWonderStage(1)
+    # masonry 每白点最多 2 阶段
+    assert BuildWonderStage(3) not in legal
+    new = apply(state, BuildWonderStage(2), db)
+    p0 = new.players[0]
+    assert p0.card_tokens == {"bronze": 1}
+    # 付 5 资源(蓝点回银行 +5), 盖 2 阶段(-2)
+    assert p0.blue_bank == 16 + 5 - 2
+    assert p0.wonder_progress == ("pyramids", 2)
+    assert p0.civil_actions == 3  # 整次动作仅 1 白点
+
+
+def test_architecture_wonder_three_stages_completes(db: CardDB) -> None:
+    """architecture: 1 白点最多 3 阶段; 完成时阶段蓝点全部放回."""
+    p = _player(developed=("architecture", "bronze"),
+                wonder_progress=("kremlin", 0),
+                card_tokens={"bronze": 12}, blue_bank=16)
+    state = _state(p)
+    legal = legal_actions(db, state)
+    assert BuildWonderStage(3) in legal
+    assert BuildWonderStage(4) not in legal  # kremlin 仅 3 阶段
+    new = apply(state, BuildWonderStage(3), db)
+    p0 = new.players[0]
+    assert p0.card_tokens == {}  # 4+4+4 = 12
+    assert p0.wonder_progress is None
+    assert p0.wonders == ("kremlin",)
+    # 付 12 资源(蓝点回银行 +12), 盖 3 放 3
+    assert p0.blue_bank == 16 + 12
+
+
+def test_engineering_wonder_four_stages(db: CardDB) -> None:
+    """engineering: 1 白点最多 4 阶段; 无 construction 卡时仅 1 阶段."""
+    p = _player(developed=("engineering", "bronze"),
+                wonder_progress=("transcontinental_railroad", 0),
+                card_tokens={"bronze": 12}, blue_bank=16)
+    legal = legal_actions(db, _state(p))
+    assert BuildWonderStage(4) in legal
+    assert BuildWonderStage(5) not in legal
+    # 无 construction 卡: 仅单阶段(回归)
+    p2 = _player(developed=("bronze",),
+                 wonder_progress=("transcontinental_railroad", 0),
+                 card_tokens={"bronze": 12}, blue_bank=16)
+    legal2 = legal_actions(db, _state(p2))
+    assert BuildWonderStage(1) in legal2
+    assert BuildWonderStage(2) not in legal2
+
+
+def test_wonder_multi_stage_blue_bank_limit(db: CardDB) -> None:
+    """多阶段建造: 蓝点不足 count 时该 count 不合法(逐阶段盖蓝点)."""
+    p = _player(developed=("masonry", "bronze"),
+                wonder_progress=("pyramids", 0),
+                card_tokens={"bronze": 6}, blue_bank=1)
+    legal = legal_actions(db, _state(p))
+    assert BuildWonderStage(1) in legal
+    assert BuildWonderStage(2) not in legal
+    # 资源不足两阶段时同样只枚举 1 阶段
+    p2 = _player(developed=("masonry", "bronze"),
+                 wonder_progress=("pyramids", 0),
+                 card_tokens={"bronze": 4}, blue_bank=16)
+    legal2 = legal_actions(db, _state(p2))
+    assert BuildWonderStage(1) in legal2
+    assert BuildWonderStage(2) not in legal2
+
+
+def test_masonry_urban_build_discount(db: CardDB) -> None:
+    """masonry: 建造城市建筑每级 -1 资源(最多 1; 级 = 时代序 A=0/I=1/II=2).
+
+    drama(时代 I, 1 级) -1; philosophy(时代 A, 0 级) 无折扣(官方规则书例:
+    时代 A 建筑不享折扣)。
+    """
+    p = _player(developed=("masonry", "drama", "philosophy", "bronze"),
+                worker_pool=2, card_tokens={"bronze": 6}, blue_bank=16)
+    state = _state(p)
+    new = apply(state, Build("drama"), db)
+    assert new.players[0].card_tokens == {"bronze": 3}  # 4 - 1
+    new2 = apply(new, Build("philosophy"), db)
+    assert new2.players[0].card_tokens == {}  # 全价 3
+
+
+def test_architecture_urban_build_discount(db: CardDB) -> None:
+    """architecture: 建造城市建筑每级 -1 资源(最多 2); opera(II, 2 级) -2."""
+    p = _player(developed=("architecture", "opera", "bronze"),
+                worker_pool=1, card_tokens={"bronze": 6}, blue_bank=16)
+    new = apply(_state(p), Build("opera"), db)
+    assert new.players[0].card_tokens == {}  # 8 - 2 = 6
+
+
+def test_masonry_urban_upgrade_discount(db: CardDB) -> None:
+    """masonry: 升级城市建筑按双边折后差价(官方规则书例).
+
+    philosophy(A 实验室 3, 无折扣) -> alchemy(I 实验室 6, -1): 付 2(比无
+    masonry 的 3 便宜 1); alchemy(I, -1) -> scientific_method(II, -1):
+    付 2(与无 masonry 相同, 两级同折扣抵消)。
+    """
+    p = _player(developed=("masonry", "philosophy", "alchemy", "bronze"),
+                buildings={"lab": {"philosophy": 1}},
+                card_tokens={"bronze": 2}, blue_bank=16)
+    state = _state(p)
+    assert Upgrade("philosophy", "alchemy") in legal_actions(db, state)
+    new = apply(state, Upgrade("philosophy", "alchemy"), db)
+    assert new.players[0].card_tokens == {}  # (6-1) - 3 = 2
+    p2 = _player(developed=("masonry", "alchemy", "scientific_method", "bronze"),
+                 buildings={"lab": {"alchemy": 1}},
+                 card_tokens={"bronze": 2}, blue_bank=16)
+    new2 = apply(_state(p2), Upgrade("alchemy", "scientific_method"), db)
+    assert new2.players[0].card_tokens == {}  # (8-1) - (6-1) = 2
+
+
+def test_urban_discount_without_construction_card(db: CardDB) -> None:
+    """无 construction 卡时建造城市建筑全价(回归)."""
+    p = _player(developed=("drama", "bronze"),
+                worker_pool=1, card_tokens={"bronze": 4}, blue_bank=16)
+    new = apply(_state(p), Build("drama"), db)
+    assert new.players[0].card_tokens == {}
