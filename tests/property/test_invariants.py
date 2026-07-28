@@ -61,16 +61,36 @@
 9. 战争/条约状态合法性(T13): declared_wars 的卡均为 WAR 类别、目标为
    未退出的其他玩家座位; pacts 双方同录(每条 (卡, 侧) 恰有另一玩家
    同录同卡异侧, 侧 ∈ {A, B}); 翻面奇迹 ⊆ 已完成奇迹。
+10. 公共阵型区一致性(P3-T2, 规则书 p3; 守恒记账见第 4 条): public_tactics
+    每卡 id 至多 1 份(同名覆盖时重复实体卡入 removed)且均为 TACTICS
+    类别; 已公开(tactics_public)的实体专属阵型卡与复制引用
+    (tactics_copied)的来源卡必在公共区(公共区只增不减: 换阵留区,
+    同名覆盖保留一张)。
+11. turn_start_choice pending 不泄漏(P3-T4): 该 pending 由 turn.proceed
+    于回合开始压入(PassTurn 已清空 pending 栈), 故独占响应栈;
+    responder=None 即响应者恒为当前玩家自己(对手无任何可执行动作),
+    phase 保持 TURN_START; 强制二选一——响应期合法动作仅 ChooseTurnStart
+    (无 DeclineResponse/PassTurn/Resign)。
 """
 
 import random
 from collections import Counter
+from dataclasses import replace
 
 import pytest
 
 from tta.cards import build_card_db
-from tta.engine import effects, politics
-from tta.engine.actions import ColonizeSacrifice, DevelopTech, Resign, SeedEvent
+from tta.engine import choices, effects, politics
+from tta.engine.actions import (
+    Build,
+    BuildWonderStage,
+    ChooseTurnStart,
+    ColonizeSacrifice,
+    DevelopTech,
+    IncreasePopulation,
+    Resign,
+    SeedEvent,
+)
 from tta.engine.apply import apply
 from tta.engine.civ import civ_values
 from tta.engine.enums import Age, CardCategory, DeckType, Phase
@@ -81,6 +101,7 @@ from tta.engine.state import (
     GameState,
     PendingEffect,
     PlayerState,
+    acting_index,
     from_dict,
     state_hash,
     to_dict,
@@ -368,8 +389,58 @@ def _assert_military_discard_pending_exact(db, state: GameState) -> None:
             f"{len(p.hand_military)}, 上限 {limit}")
 
 
-def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
-    """跑一整局, 每步断言全部不变量, 返回终局状态."""
+def _assert_public_tactics_consistency(db, state: GameState) -> None:
+    """公共阵型区一致性(模块 docstring 第 10 条).
+
+    公共区只增不减(换阵留区; 同名覆盖保留一张、重复实体卡入 removed),
+    故已公开的实体专属阵型卡与复制引用的来源卡必仍在区中; 反向不断言
+    (未公开实体卡可能与公共区同名单份同 id, 见 _accounted 口径注释)。
+    """
+    # 每卡 id 至多 1 份(同名覆盖口径)且均为 TACTICS 类别
+    assert len(set(state.public_tactics)) == len(state.public_tactics)
+    for card_id in state.public_tactics:
+        assert db.get(card_id).category is CardCategory.TACTICS, card_id
+    for p in state.players:
+        if p.tactics is None:
+            continue
+        if p.tactics_copied:
+            # 复制引用无实体卡: 来源卡必在公共区(CopyTactics 唯一合法来源)
+            assert p.tactics in state.public_tactics, (
+                f"{p.name} 复制的阵型 {p.tactics} 不在公共区")
+        elif p.tactics_public:
+            # 已公开的实体专属阵型卡必已入公共区(回合开始强制公开)
+            assert p.tactics in state.public_tactics, (
+                f"{p.name} 已公开阵型 {p.tactics} 不在公共区")
+
+
+def _assert_turn_start_choice_no_leak(db, state: GameState) -> None:
+    """turn_start_choice pending 不泄漏(模块 docstring 第 11 条)."""
+    for e in state.pending:
+        if e.kind != choices.KIND_TURN_START_CHOICE:
+            continue
+        # 压入点为 turn.proceed 回合开始(PassTurn 已清空 pending 栈),
+        # 故该 pending 独占响应栈; responder=None 即当前玩家自己
+        assert state.pending == (e,)
+        assert e.responder is None
+        assert state.phase is Phase.TURN_START
+        assert acting_index(state) == state.current_player
+        legal = legal_actions(db, state)
+        # 强制二选一: 响应期合法动作仅 ChooseTurnStart(无 DeclineResponse/
+        # PassTurn/Resign), 对手座位无任何可执行动作
+        assert legal
+        assert all(isinstance(a, ChooseTurnStart) for a in legal), (
+            f"turn_start_choice 响应期泄漏其他动作: {legal}")
+
+
+def _run_game_with_invariants(
+    db, seed: int, num_players: int = 2, stats: dict[str, bool] | None = None,
+) -> GameState:
+    """跑一整局, 每步断言全部不变量, 返回终局状态.
+
+    stats 非 None 时记录机制覆盖标志(public_tactics_seen /
+    turn_start_choice_seen), 供覆盖证明测试断言随机整局实际经过
+    P3 新机制的响应期(不变量只有被经过才有意义)。
+    """
     state = new_game(db, num_players, seed)
     rng = random.Random(seed)
     universe = _universe(db, num_players)
@@ -379,11 +450,17 @@ def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
     blue_adj = [0] * num_players
     steps = 0
     while not state.terminal:
+        if stats is not None:
+            if state.public_tactics:
+                stats["public_tactics_seen"] = True
+            if any(e.kind == choices.KIND_TURN_START_CHOICE
+                   for e in state.pending):
+                stats["turn_start_choice_seen"] = True
         legal = legal_actions(db, state)
         # 驱动不主动体面退出(Resign 恒合法, 随机选取会提前终局, 丧失中后段
         # 不变量覆盖; 退出机制由 tests/engine/test_pacts.py 专项覆盖)
-        choices = [a for a in legal if not isinstance(a, Resign)]
-        action = rng.choice(choices or legal)
+        candidates = [a for a in legal if not isinstance(a, Resign)]
+        action = rng.choice(candidates or legal)
         if isinstance(action, DevelopTech) and action.card_id in BLUE_GAIN_CARDS:
             # 研发 justice_system/civil_service 各从盒中 +3 蓝点(含
             # breakthrough pending 子行动; 替换移除不影响已得蓝点)
@@ -455,6 +532,8 @@ def _run_game_with_invariants(db, seed: int, num_players: int = 2) -> GameState:
         _assert_event_conservation(db, state, event_universe)
         _assert_war_pact_legality(db, state)
         _assert_military_discard_pending_exact(db, state)
+        _assert_public_tactics_consistency(db, state)
+        _assert_turn_start_choice_no_leak(db, state)
         if steps % SERIALIZE_EVERY == 0:
             assert from_dict(to_dict(state)) == state, (
                 f"seed {seed} step {steps} 序列化往返失败"
@@ -483,6 +562,18 @@ def test_full_game_invariants(db, seed: int) -> None:
 def test_full_game_invariants_3p(db, seed: int) -> None:
     """3 种子 3 人整局(T13): 覆盖条约双录/多目标战争/多方殖民竞拍."""
     _run_game_with_invariants(db, seed, num_players=3)
+
+
+def test_random_games_exercise_p3_mechanisms(db) -> None:
+    """覆盖证明: 随机整局实际经过公共阵型区与 turn_start_choice 响应期.
+
+    第 10/11 条不变量只有被经过才有意义: 2 人 seed 0 中 churchill 被
+    打出(3 次 turn_start_choice pending), 全部种子公共阵型区非空。
+    """
+    stats: dict[str, bool] = {}
+    _run_game_with_invariants(db, 0, stats=stats)
+    assert stats["public_tactics_seen"]
+    assert stats["turn_start_choice_seen"]
 
 
 def test_state_hash_chain_deterministic(db) -> None:
@@ -555,3 +646,114 @@ def test_colony_permanent_tokens_compensated(db) -> None:
     for i, p in enumerate(new.players):
         _assert_player_invariants(
             db, new, p, 0, yellow_adj[i], blue_adj[i])
+
+
+def _action_state(players: tuple[PlayerState, ...]) -> GameState:
+    """ACTION 相位脚本化场景(2 回合, 无牌列/牌堆, 当前玩家 0 号位)."""
+    return GameState(
+        round=2,
+        age=Age.A,
+        current_player=0,
+        card_row=(None,) * ROW_SLOTS,
+        civil_deck=(),
+        future_decks={},
+        discard=(),
+        removed=(),
+        players=players,
+        rng_state=42,
+        phase=Phase.ACTION,
+    )
+
+
+def test_multi_stage_wonder_blue_conservation(db) -> None:
+    """masonry 多阶段奇迹建造蓝点守恒: 银行 + 卡上 + 奇迹上 = 16 恒成立.
+
+    pyramids 阶段 (3, 2, 1): BuildWonderStage(2) 付 3+2=5 资源(卡上蓝点
+    回银行)、逐阶段盖 2 蓝点(银行 -> 奇迹); 再 BuildWonderStage(1) 完成,
+    奇迹上蓝点全部放回银行(官方规则: 奇迹完成时盖上蓝点放回供给区)。
+    中间态与完成态均精确守恒 16(无 justice_system/civil_service 增益)。
+    """
+    p0 = replace(
+        _tableau_player("P0"),
+        developed=_tableau_player("P0").developed + ("masonry",),
+        wonder_progress=("pyramids", 0),
+        card_tokens={"bronze": 5},
+        blue_bank=11,  # 11 + 5(卡上) + 0(奇迹) = 16
+        civil_actions=4,
+    )
+    state = _action_state((p0, _tableau_player("P1")))
+    assert _blue_total(state.players[0]) == 16
+    assert BuildWonderStage(2) in legal_actions(db, state)
+    state = apply(state, BuildWonderStage(2), db)
+    p = state.players[0]
+    assert p.wonder_progress == ("pyramids", 2)
+    # 付 5 资源(卡上 -> 银行) + 盖 2 阶段(银行 -> 奇迹): 14 + 0 + 2 = 16
+    assert p.card_tokens == {}
+    assert p.blue_bank == 14
+    assert _blue_total(p) == 16
+
+    # 完成阶段: 已付 2 阶段在奇迹上, 付最后 1 资源盖 1 阶段后完成放回
+    p0 = replace(
+        _tableau_player("P0"),
+        developed=_tableau_player("P0").developed + ("masonry",),
+        wonder_progress=("pyramids", 2),
+        card_tokens={"bronze": 1},
+        blue_bank=13,  # 13 + 1(卡上) + 2(奇迹) = 16
+        civil_actions=4,
+    )
+    state = _action_state((p0, _tableau_player("P1")))
+    assert _blue_total(state.players[0]) == 16
+    state = apply(state, BuildWonderStage(1), db)
+    p = state.players[0]
+    assert p.wonder_progress is None
+    assert p.wonders == ("pyramids",)
+    # 完成: 奇迹上 3 蓝点全放回银行, 无在建奇迹项
+    assert p.blue_bank == 16
+    assert _blue_total(p) == 16
+
+
+def test_trade_routes_substitution_blue_conservation(db) -> None:
+    """trade_routes 替换支付蓝点守恒: 替换仅是跨类型挪点, 总量恒 16.
+
+    A 侧(食抵资): 建青铜付 1 食物 + 1 资源, 两枚蓝点均回银行;
+    B 侧(资抵食): 增人口付 1 资源 + 1 食物, 同理。替换不产不毁蓝点。
+    """
+    base = _tableau_player("P0")
+    # A 侧: 资源差 1(矿上仅 1 蓝点) -> 用 1 食物抵 1 资源建青铜
+    # (developed 第 3 份 bronze: 2 份已在矿上, 建造位须有空缺)
+    p0 = replace(
+        base,
+        developed=base.developed + ("bronze",),
+        pacts=(("trade_routes_agreement", "A"),),
+        card_tokens={"bronze": 1, "agriculture": 2},
+        blue_bank=13,  # 13 + 3(卡上) = 16
+        civil_actions=4,
+    )
+    p1 = replace(
+        _tableau_player("P1"), pacts=(("trade_routes_agreement", "B"),))
+    state = _action_state((p0, p1, _tableau_player("P2")))
+    assert _blue_total(state.players[0]) == 16
+    assert Build("bronze") in legal_actions(db, state)
+    state = apply(state, Build("bronze"), db)
+    p = state.players[0]
+    assert p.card_tokens == {"agriculture": 1}
+    assert p.turn_discounts == {effects.TRADE_ROUTES_USED_KEY: 1}
+    assert _blue_total(p) == 16
+
+    # B 侧: 食物差 1(农上仅 1 蓝点) -> 用 1 资源抵 1 食物增人口
+    p0 = replace(
+        base,
+        pacts=(("trade_routes_agreement", "B"),),
+        card_tokens={"agriculture": 1, "bronze": 2},
+        blue_bank=13,  # 13 + 3(卡上) = 16
+        civil_actions=4,
+    )
+    p1 = replace(
+        _tableau_player("P1"), pacts=(("trade_routes_agreement", "A"),))
+    state = _action_state((p0, p1, _tableau_player("P2")))
+    assert _blue_total(state.players[0]) == 16
+    assert IncreasePopulation() in legal_actions(db, state)
+    state = apply(state, IncreasePopulation(), db)
+    p = state.players[0]
+    assert p.card_tokens == {"bronze": 1}
+    assert _blue_total(p) == 16

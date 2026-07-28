@@ -451,10 +451,10 @@ def test_einstein_develop_tech_gains_culture(db: CardDB) -> None:
 
 
 def test_gandhi_static_bonus(db: CardDB) -> None:
-    """mahatma_gandhi: +2 文化(侵略/战争限制 P2-DEFERRED)."""
+    """mahatma_gandhi: +2 文化(侵略/战争限制与双倍费用见 politics 专项)."""
     civ = civ_values(db, _player(leader="mahatma_gandhi"))
     assert civ.culture_rate == 2
-    assert "P2-DEFERRED" in db.get("mahatma_gandhi").text
+    assert "双倍军事行动" in db.get("mahatma_gandhi").text
 
 
 def test_chaplin_static_bonus(db: CardDB) -> None:

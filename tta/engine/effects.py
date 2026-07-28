@@ -73,7 +73,8 @@ Age A 领袖钩子(Task 9):
   leonardo 口径); on_develop_tech_gains 在 apply DevelopTech 结算时
   +3 文化(PDF 图标为文化竖琴, 每次研发触发, 非一次性);
 - mahatma_gandhi: STATIC_BONUS(+2 文化, PDF 图标为文化竖琴);
-  不能打侵略/战争与双倍军事行动 P2-DEFERRED;
+  不能打侵略/战争(legal 闸口, P2-T8/T9, 见 politics._aggression_actions
+  与 _war_actions)与被攻击费用 ×2(见 politics.aggression_cost);
 - charlie_chaplin: STATIC_BONUS(+2 笑脸; 最佳剧院按工人数 × 卡面文化
   再计一份文化, 即双倍);
 - sid_meier: STATIC_BONUS(实验室每级 +1 文化、每个实验室 -1 科技,
@@ -866,7 +867,7 @@ def _einstein_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
 
 
 def _gandhi_bonus(db: CardDB, p: PlayerState) -> dict[str, int]:
-    """mahatma_gandhi: +2 文化(侵略/战争限制与双倍军事行动 P2-DEFERRED)."""
+    """mahatma_gandhi: +2 文化(侵略/战争限制与双倍费用见 politics)."""
     return {"culture": 2}
 
 

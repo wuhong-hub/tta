@@ -267,7 +267,7 @@ ALBERT_EINSTEIN = _leader(
 MAHATMA_GANDHI = _leader(
     "mahatma_gandhi", "圣雄甘地", "Mahatma Gandhi",
     "+2 文化; 你不能打出侵略或战争牌; 针对你的侵略与战争花费双倍军事行动"
-    "(军事互动 P2-DEFERRED)。",
+    "(军事互动均已实现: legal 闸口与 aggression_cost ×2)。",
     handler="mahatma_gandhi",
 )
 
